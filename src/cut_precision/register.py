@@ -402,14 +402,6 @@ def _line_intersection(
     return np.array([x, y], dtype=np.float64)
 
 
-def _unit_direction(p1: np.ndarray, p2: np.ndarray) -> np.ndarray | None:
-    vec = (p2 - p1).astype(np.float64)
-    norm = float(np.linalg.norm(vec))
-    if norm < 1e-8:
-        return None
-    return vec / norm
-
-
 def _ecc_motion_mode(name: str) -> int:
     normalized = name.strip().lower()
     if normalized == "translation":

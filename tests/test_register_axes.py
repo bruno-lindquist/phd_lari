@@ -22,7 +22,6 @@ def test_axes_fallback_translation():
     cfg = RegistrationConfig(
         use_axes_fallback=True,
         axes_hough_threshold=60,
-        axes_min_line_ratio=0.4,
         axes_max_line_gap=8,
         axes_angle_tolerance_deg=15.0,
     )

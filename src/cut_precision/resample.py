@@ -11,14 +11,6 @@ def ensure_closed(points: np.ndarray) -> np.ndarray:
     return np.vstack([points, points[0]])
 
 
-def contour_to_points(contour: np.ndarray) -> np.ndarray:
-    if contour.ndim == 3 and contour.shape[1] == 1 and contour.shape[2] == 2:
-        return contour[:, 0, :].astype(np.float32)
-    if contour.ndim == 2 and contour.shape[1] == 2:
-        return contour.astype(np.float32)
-    raise ValueError(f"Unsupported contour shape: {contour.shape}")
-
-
 def resample_closed_contour(
     points: np.ndarray,
     step_px: float | None = 1.5,

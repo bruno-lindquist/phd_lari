@@ -35,7 +35,6 @@ class RegistrationConfig:
     axes_canny_low: int = 50
     axes_canny_high: int = 150
     axes_hough_threshold: int = 120
-    axes_min_line_ratio: float = 0.20
     axes_segment_min_line_ratio: float = 0.05
     axes_max_line_gap: int = 15
     axes_angle_tolerance_deg: float = 20.0

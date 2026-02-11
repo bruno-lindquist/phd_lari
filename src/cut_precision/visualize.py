@@ -67,9 +67,3 @@ def save_histogram(path: str | Path, distances: np.ndarray) -> None:
     plt.tight_layout()
     plt.savefig(path, dpi=150)
     plt.close()
-
-
-def save_distance_map(path: str | Path, dist_map: np.ndarray) -> None:
-    norm = cv2.normalize(dist_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    color = cv2.applyColorMap(norm, cv2.COLORMAP_TURBO)
-    cv2.imwrite(str(path), color)
