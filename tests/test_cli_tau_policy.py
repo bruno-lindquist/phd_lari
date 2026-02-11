@@ -58,11 +58,13 @@ def test_pipeline_cli_labeled_policy_is_recorded_in_report(tmp_path):
     _write_report(tmp_path / "bad1.json", mad_px=35.0, scale_px=100.0)
     _write_report(tmp_path / "bad2.json", mad_px=40.0, scale_px=100.0)
 
+    template_path = "original.jpeg" if Path("original.jpeg").exists() else "original.jpg"
+
     out_dir = tmp_path / "out"
     rc = pipeline_main(
         [
             "--template",
-            "original.jpeg",
+            template_path,
             "--test",
             "teste_1.jpg",
             "--out",

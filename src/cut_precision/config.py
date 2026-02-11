@@ -36,8 +36,11 @@ class RegistrationConfig:
     axes_canny_high: int = 150
     axes_hough_threshold: int = 120
     axes_min_line_ratio: float = 0.20
+    axes_segment_min_line_ratio: float = 0.05
     axes_max_line_gap: int = 15
     axes_angle_tolerance_deg: float = 20.0
+    axes_horizontal_roi_min_y_ratio: float = 0.65
+    axes_vertical_roi_max_x_ratio: float = 0.35
     use_ecc_fallback: bool = True
     ecc_motion: str = "affine"
     ecc_iterations: int = 1500

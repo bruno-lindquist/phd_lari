@@ -29,6 +29,7 @@ from .metrics import (
     to_mm,
 )
 from .register import (
+    RegistrationResult,
     estimate_homography_axes,
     estimate_homography_ecc,
     estimate_homography_orb,
@@ -46,7 +47,6 @@ from .tau import (
 )
 from .tau_export import write_tau_curve_csv, write_tau_curve_png
 from .visualize import (
-    save_distance_map,
     save_error_map,
     save_histogram,
     save_mask,
@@ -381,7 +381,6 @@ def main(argv: list[str] | None = None) -> int:
     ideal = extract_ideal_contour(template, cfg.extraction)
     real = extract_real_contour(test, cfg.extraction)
     if args.debug:
-        save_mask(out_dir / "ideal_mask.png", ideal.cleaned_mask)
         save_mask(out_dir / "real_mask.png", real.cleaned_mask)
 
     if not ideal.success or not real.success:
@@ -398,14 +397,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     registration = estimate_homography_orb(template, test, cfg.registration)
-    if not registration.success and cfg.registration.use_axes_fallback:
-        axes_registration = estimate_homography_axes(template, test, cfg.registration)
-        if axes_registration.success:
-            registration = axes_registration
-    if not registration.success and cfg.registration.use_ecc_fallback:
-        ecc_registration = estimate_homography_ecc(template, test, cfg.registration)
-        if ecc_registration.success:
-            registration = ecc_registration
+    registration, reg_selection_mad_px, reg_candidates = _select_registration_with_contour_score(
+        template=template,
+        test=test,
+        cfg=cfg,
+        ideal_contour=ideal.contour,
+        real_contour=real.contour,
+        first_attempt=registration,
+    )
     homography = registration.homography if registration.success else np.eye(3, dtype=np.float32)
     real_points_aligned = warp_points(real.contour, homography)
 
@@ -475,8 +474,6 @@ def main(argv: list[str] | None = None) -> int:
     save_overlay(out_dir / "overlay.png", template, ideal_points, real_points)
     save_error_map(out_dir / "error_map.png", template, real_points, dist_px)
     save_histogram(out_dir / "error_hist.png", dist_px)
-    if args.debug:
-        save_distance_map(out_dir / "dist_map.png", dist_map)
     _write_distances_csv(out_dir / "distances.csv", real_points, dist_px, calib.mm_per_px)
 
     report = {
@@ -495,6 +492,9 @@ def main(argv: list[str] | None = None) -> int:
             "inlier_ratio": registration.inlier_ratio,
             "reprojection_error_px": registration.reprojection_error_px,
             "reason": registration.reason,
+            "selection_strategy": "min_contour_mad_kdtree",
+            "selection_mad_px": reg_selection_mad_px,
+            "candidates": reg_candidates,
         },
         "calibration": {
             "status": calib.status,
@@ -605,6 +605,91 @@ def _write_distances_csv(
         else:
             for idx, (pt, dpx) in enumerate(zip(points, distances_px, strict=True)):
                 writer.writerow([idx, float(pt[0]), float(pt[1]), float(dpx), float(dpx * mm_per_px)])
+
+
+def _select_registration_with_contour_score(
+    template: np.ndarray,
+    test: np.ndarray,
+    cfg: AppConfig,
+    ideal_contour: np.ndarray,
+    real_contour: np.ndarray,
+    first_attempt: RegistrationResult,
+) -> tuple[RegistrationResult, float | None, list[dict[str, float | int | str | bool | None]]]:
+    candidates: list[RegistrationResult] = [first_attempt]
+    if cfg.registration.use_axes_fallback:
+        candidates.append(estimate_homography_axes(template, test, cfg.registration))
+    if cfg.registration.use_ecc_fallback:
+        candidates.append(estimate_homography_ecc(template, test, cfg.registration))
+
+    ideal_points = resample_closed_contour(
+        ideal_contour,
+        step_px=cfg.sampling.step_px,
+        num_points=cfg.sampling.num_points,
+        max_points=cfg.sampling.max_points,
+    )
+    return _pick_best_registration_for_contour(
+        candidates=candidates,
+        real_contour=real_contour,
+        ideal_points=ideal_points,
+        cfg=cfg,
+    )
+
+
+def _pick_best_registration_for_contour(
+    candidates: list[RegistrationResult],
+    real_contour: np.ndarray,
+    ideal_points: np.ndarray,
+    cfg: AppConfig,
+) -> tuple[RegistrationResult, float | None, list[dict[str, float | int | str | bool | None]]]:
+    debug_rows: list[dict[str, float | int | str | bool | None]] = []
+    best_candidate: RegistrationResult | None = None
+    best_mad: float | None = None
+
+    for reg in candidates:
+        mad_px = None
+        if reg.success:
+            mad_px = _registration_mad_px(
+                real_contour=real_contour,
+                ideal_points=ideal_points,
+                homography=reg.homography,
+                cfg=cfg,
+            )
+            if best_mad is None or mad_px < best_mad:
+                best_mad = mad_px
+                best_candidate = reg
+        debug_rows.append(
+            {
+                "method": reg.method,
+                "success": reg.success,
+                "reason": reg.reason,
+                "matches_total": reg.matches_total,
+                "matches_used": reg.matches_used,
+                "inlier_ratio": reg.inlier_ratio,
+                "reprojection_error_px": reg.reprojection_error_px,
+                "selection_mad_px": mad_px,
+            }
+        )
+
+    if best_candidate is not None:
+        return best_candidate, best_mad, debug_rows
+    return candidates[0], None, debug_rows
+
+
+def _registration_mad_px(
+    real_contour: np.ndarray,
+    ideal_points: np.ndarray,
+    homography: np.ndarray,
+    cfg: AppConfig,
+) -> float:
+    warped = warp_points(real_contour, homography)
+    warped_points = resample_closed_contour(
+        warped,
+        step_px=cfg.sampling.step_px,
+        num_points=cfg.sampling.num_points,
+        max_points=cfg.sampling.max_points,
+    )
+    distances = distances_via_kdtree(warped_points, ideal_points)
+    return float(compute_statistics(distances).mad)
 
 
 def _git_commit() -> str | None:

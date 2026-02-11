@@ -25,6 +25,8 @@ class _AxisFrame:
     origin: np.ndarray
     u_h: np.ndarray
     u_v: np.ndarray
+    span_h: float
+    span_v: float
 
 
 def estimate_homography_orb(
@@ -133,8 +135,12 @@ def estimate_homography_axes(
             reason="axis_detection_failed",
         )
 
-    src_basis = np.column_stack([test_frame.u_h, test_frame.u_v]).astype(np.float64)
-    dst_basis = np.column_stack([template_frame.u_h, template_frame.u_v]).astype(np.float64)
+    src_basis = np.column_stack(
+        [test_frame.u_h * test_frame.span_h, test_frame.u_v * test_frame.span_v]
+    ).astype(np.float64)
+    dst_basis = np.column_stack(
+        [template_frame.u_h * template_frame.span_h, template_frame.u_v * template_frame.span_v]
+    ).astype(np.float64)
 
     det = float(np.linalg.det(src_basis))
     if abs(det) < 1e-6:
@@ -265,12 +271,12 @@ def _detect_axis_frame(image_bgr: np.ndarray, cfg: RegistrationConfig) -> _AxisF
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(blur, cfg.axes_canny_low, cfg.axes_canny_high)
     h, w = edges.shape[:2]
-    min_len = int(max(h, w) * cfg.axes_min_line_ratio)
+    min_len = int(max(h, w) * cfg.axes_segment_min_line_ratio)
     lines = cv2.HoughLinesP(
         edges,
         rho=1.0,
         theta=np.pi / 180.0,
-        threshold=cfg.axes_hough_threshold,
+        threshold=max(30, int(round(cfg.axes_hough_threshold * 0.5))),
         minLineLength=min_len,
         maxLineGap=cfg.axes_max_line_gap,
     )
@@ -280,16 +286,18 @@ def _detect_axis_frame(image_bgr: np.ndarray, cfg: RegistrationConfig) -> _AxisF
     horizontals: list[np.ndarray] = []
     verticals: list[np.ndarray] = []
     tol = float(cfg.axes_angle_tolerance_deg)
+    min_y = float(h) * float(cfg.axes_horizontal_roi_min_y_ratio)
+    max_x = float(w) * float(cfg.axes_vertical_roi_max_x_ratio)
 
     for line in lines[:, 0, :]:
         x1, y1, x2, y2 = map(float, line.tolist())
         dx, dy = x2 - x1, y2 - y1
         length = float(np.hypot(dx, dy))
-        if length < min_len:
-            continue
         angle = float(np.degrees(np.arctan2(dy, dx)))
         angle_abs = abs(((angle + 180.0) % 180.0))
-        line_vec = np.array([x1, y1, x2, y2, length], dtype=np.float64)
+        cx = 0.5 * (x1 + x2)
+        cy = 0.5 * (y1 + y2)
+        line_vec = np.array([x1, y1, x2, y2, length, cx, cy], dtype=np.float64)
         if angle_abs <= tol or angle_abs >= (180.0 - tol):
             horizontals.append(line_vec)
         if abs(angle_abs - 90.0) <= tol:
@@ -298,22 +306,32 @@ def _detect_axis_frame(image_bgr: np.ndarray, cfg: RegistrationConfig) -> _AxisF
     if not horizontals or not verticals:
         return None
 
-    h_line = max(horizontals, key=lambda l: float(l[4]))
-    v_line = max(verticals, key=lambda l: float(l[4]))
+    horizontal_roi = [seg for seg in horizontals if float(seg[6]) >= min_y]
+    vertical_roi = [seg for seg in verticals if float(seg[5]) <= max_x]
+    if horizontal_roi:
+        horizontals = horizontal_roi
+    if vertical_roi:
+        verticals = vertical_roi
 
-    h_p1, h_p2 = h_line[:2], h_line[2:4]
-    v_p1, v_p2 = v_line[:2], v_line[2:4]
+    if not horizontals or not verticals:
+        return None
+
+    h_point, u_h = _fit_axis_line(horizontals)
+    v_point, u_v = _fit_axis_line(verticals)
+    if h_point is None or u_h is None or v_point is None or u_v is None:
+        return None
+
+    h_p1 = h_point - 1000.0 * u_h
+    h_p2 = h_point + 1000.0 * u_h
+    v_p1 = v_point - 1000.0 * u_v
+    v_p2 = v_point + 1000.0 * u_v
     origin = _line_intersection(h_p1, h_p2, v_p1, v_p2)
     if origin is None:
         return None
 
-    u_h = _unit_direction(h_p1, h_p2)
-    u_v = _unit_direction(v_p1, v_p2)
-    if u_h is None or u_v is None:
-        return None
     if u_h[0] < 0:
         u_h = -u_h
-    if u_v[1] < 0:
+    if u_v[1] > 0:
         u_v = -u_v
 
     # Keep only near-orthogonal frames; rejects accidental long contour lines.
@@ -321,11 +339,50 @@ def _detect_axis_frame(image_bgr: np.ndarray, cfg: RegistrationConfig) -> _AxisF
     if ortho > np.cos(np.deg2rad(max(1.0, 90.0 - tol))):
         return None
 
+    span_h = _estimate_axis_span(origin, u_h, horizontals)
+    span_v = _estimate_axis_span(origin, u_v, verticals)
+    if span_h <= 1.0 or span_v <= 1.0:
+        return None
+
     return _AxisFrame(
         origin=origin.astype(np.float64),
         u_h=u_h.astype(np.float64),
         u_v=u_v.astype(np.float64),
+        span_h=float(span_h),
+        span_v=float(span_v),
     )
+
+
+def _fit_axis_line(segments: list[np.ndarray]) -> tuple[np.ndarray | None, np.ndarray | None]:
+    if not segments:
+        return None, None
+    pts: list[list[float]] = []
+    for seg in segments:
+        pts.append([float(seg[0]), float(seg[1])])
+        pts.append([float(seg[2]), float(seg[3])])
+    arr = np.array(pts, dtype=np.float32)
+    if arr.shape[0] < 2:
+        return None, None
+    line = cv2.fitLine(arr, cv2.DIST_L2, 0, 0.01, 0.01)
+    vx, vy, x0, y0 = [float(v) for v in line.flatten().tolist()]
+    direction = np.array([vx, vy], dtype=np.float64)
+    norm = float(np.linalg.norm(direction))
+    if norm < 1e-8:
+        return None, None
+    point = np.array([x0, y0], dtype=np.float64)
+    return point, direction / norm
+
+
+def _estimate_axis_span(origin: np.ndarray, axis_u: np.ndarray, segments: list[np.ndarray]) -> float:
+    projections: list[float] = []
+    for seg in segments:
+        p1 = np.array([float(seg[0]), float(seg[1])], dtype=np.float64)
+        p2 = np.array([float(seg[2]), float(seg[3])], dtype=np.float64)
+        projections.append(float(abs(np.dot(p1 - origin, axis_u))))
+        projections.append(float(abs(np.dot(p2 - origin, axis_u))))
+    if not projections:
+        return 0.0
+    return float(np.percentile(np.array(projections, dtype=np.float64), 95.0))
 
 
 def _line_intersection(
