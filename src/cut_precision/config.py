@@ -13,6 +13,9 @@ class ExtractionConfig:
     ideal_close_kernel: int = 5
     ideal_dilate_kernel: int = 3
     ideal_min_area_ratio: float = 0.001
+    ideal_group_area_ratio_to_max: float = 0.35
+    ideal_group_center_radius_ratio: float = 0.45
+    ideal_group_close_kernel: int = 9
     line_removal_min_length_ratio: float = 0.3
     line_removal_thickness: int = 3
     real_lab_l_threshold: int = 95

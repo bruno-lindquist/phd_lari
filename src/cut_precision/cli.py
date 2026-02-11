@@ -53,6 +53,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default=None, help="Config file (json/yaml)")
     parser.add_argument("--step-px", type=float, default=None, help="Resampling step in px")
     parser.add_argument("--num-points", type=int, default=None, help="Fixed number of contour points")
+    parser.add_argument("--tau", type=float, default=None, help="IPN tolerance factor (relative)")
+    parser.add_argument(
+        "--manual-mm-per-px",
+        type=float,
+        default=None,
+        help="Override automatic ruler calibration",
+    )
     parser.add_argument("--no-kd-validate", action="store_true", help="Disable KDTree validation")
     parser.add_argument("--debug", action="store_true", help="Save intermediate artifacts")
     return parser
@@ -65,6 +72,10 @@ def main(argv: list[str] | None = None) -> int:
         cfg.sampling.step_px = args.step_px
     if args.num_points is not None:
         cfg.sampling.num_points = args.num_points
+    if args.tau is not None:
+        cfg.metrics.tau = args.tau
+    if args.manual_mm_per_px is not None:
+        cfg.calibration.manual_mm_per_px = args.manual_mm_per_px
     if args.no_kd_validate:
         cfg.distance.validate_with_kdtree = False
 

@@ -44,12 +44,18 @@ def extract_ideal_contour(image_bgr: np.ndarray, cfg: ExtractionConfig) -> Extra
     cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, close_kernel)
     cleaned = cv2.dilate(cleaned, dilate_kernel, iterations=1)
 
-    contour = _select_best_contour(cleaned, cfg.ideal_min_area_ratio)
+    grouped_mask = _select_ideal_component_group(cleaned, cfg)
+    contour = _largest_external_contour(grouped_mask)
+    cleaned_for_output = grouped_mask
+    if contour is None:
+        contour = _select_best_contour(cleaned, cfg.ideal_min_area_ratio)
+        cleaned_for_output = cleaned
+
     if contour is None:
         return ExtractionResult(
             contour=np.empty((0, 2), dtype=np.float32),
             binary_mask=binary,
-            cleaned_mask=cleaned,
+            cleaned_mask=cleaned_for_output,
             success=False,
             reason="no_ideal_contour_found",
         )
@@ -57,7 +63,7 @@ def extract_ideal_contour(image_bgr: np.ndarray, cfg: ExtractionConfig) -> Extra
     return ExtractionResult(
         contour=contour,
         binary_mask=binary,
-        cleaned_mask=cleaned,
+        cleaned_mask=cleaned_for_output,
         success=True,
     )
 
@@ -171,6 +177,64 @@ def _select_best_contour(mask: np.ndarray, min_area_ratio: float) -> np.ndarray 
         return None
     contour = max(contours, key=lambda c: c.shape[0])
     return contour[:, 0, :].astype(np.float32)
+
+
+def _select_ideal_component_group(mask: np.ndarray, cfg: ExtractionConfig) -> np.ndarray:
+    h, w = mask.shape[:2]
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        (mask > 0).astype(np.uint8), connectivity=8
+    )
+    if num_labels <= 1:
+        return mask
+
+    min_area = float(cfg.ideal_min_area_ratio * h * w)
+    center = np.array([w / 2.0, h / 2.0], dtype=np.float64)
+    diag = float(np.hypot(w, h))
+
+    candidates: list[int] = []
+    candidate_areas: list[float] = []
+    for comp_idx in range(1, num_labels):
+        area = float(stats[comp_idx, cv2.CC_STAT_AREA])
+        if area < min_area:
+            continue
+        x = int(stats[comp_idx, cv2.CC_STAT_LEFT])
+        y = int(stats[comp_idx, cv2.CC_STAT_TOP])
+        cw = int(stats[comp_idx, cv2.CC_STAT_WIDTH])
+        ch = int(stats[comp_idx, cv2.CC_STAT_HEIGHT])
+        if x <= 1 or y <= 1 or (x + cw) >= (w - 1) or (y + ch) >= (h - 1):
+            continue
+        centroid = centroids[comp_idx].astype(np.float64)
+        if float(np.linalg.norm(centroid - center)) > cfg.ideal_group_center_radius_ratio * diag:
+            continue
+        candidates.append(comp_idx)
+        candidate_areas.append(area)
+
+    if not candidates:
+        return mask
+
+    max_area = max(candidate_areas)
+    area_threshold = cfg.ideal_group_area_ratio_to_max * max_area
+    selected = [
+        comp_idx
+        for comp_idx, area in zip(candidates, candidate_areas, strict=True)
+        if area >= area_threshold
+    ]
+    if not selected:
+        selected = [candidates[int(np.argmax(np.array(candidate_areas)))]]
+
+    merged = np.zeros_like(mask)
+    for comp_idx in selected:
+        merged[labels == comp_idx] = 255
+
+    kernel_size = max(3, int(cfg.ideal_group_close_kernel))
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    group_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (kernel_size, kernel_size),
+    )
+    merged = cv2.morphologyEx(merged, cv2.MORPH_CLOSE, group_kernel)
+    return merged
 
 
 def _largest_external_contour(mask: np.ndarray) -> np.ndarray | None:
