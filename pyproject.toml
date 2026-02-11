@@ -14,11 +14,17 @@ dependencies = [
   "scipy>=1.11",
   "matplotlib>=3.8",
   "scikit-image>=0.22",
+  "pillow>=12.1.1",
+  "loguru>=0.7.2",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.9.7",
+  "mypy>=1.14.1",
+  "pip-audit>=2.9.0",
 ]
 
 [project.scripts]
@@ -34,3 +40,26 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+files = [
+  "src/cut_precision/config.py",
+  "src/cut_precision/calibration.py",
+  "src/cut_precision/io_utils.py",
+  "src/cut_precision/report.py",
+  "src/cut_precision/visualize.py",
+  "src/cut_precision/tau_service.py",
+]

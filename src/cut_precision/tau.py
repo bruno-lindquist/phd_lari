@@ -383,7 +383,7 @@ def _tau_from_single_report(
 ) -> TauCandidate | None:
     try:
         payload = json.loads(Path(report_path).read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return None
 
     metrics = payload.get("metrics")
@@ -448,7 +448,7 @@ def _extract_ratio_values(paths: list[str], units: str) -> list[tuple[str, float
 def _load_metrics(report_path: str) -> dict | None:
     try:
         payload = json.loads(Path(report_path).read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return None
     metrics = payload.get("metrics")
     if not isinstance(metrics, dict):

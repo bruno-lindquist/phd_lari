@@ -53,7 +53,7 @@ def write_tau_curve_png(path: str, curve: TauCurve, best_tau: float) -> str:
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-    except Exception as exc:
+    except ImportError as exc:
         raise RuntimeError("matplotlib is required to export tau curve PNG") from exc
 
     out = Path(path)

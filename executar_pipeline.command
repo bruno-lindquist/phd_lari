@@ -4,6 +4,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_DIR="$PROJECT_DIR/.venv"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+CLI_BIN="$VENV_DIR/bin/cut-precision"
 
 TEST_IMAGE="$PROJECT_DIR/teste_1.jpg"
 OUT_ROOT="$PROJECT_DIR/out"
@@ -56,15 +57,34 @@ fi
 
 mkdir -p "$OUT_ROOT"
 
+NEEDS_SETUP=0
 if ! "$VENV_DIR/bin/python" -c "import cut_precision" >/dev/null 2>&1; then
+  NEEDS_SETUP=1
+fi
+if [ ! -x "$CLI_BIN" ]; then
+  NEEDS_SETUP=1
+fi
+
+if [ "$NEEDS_SETUP" -eq 1 ]; then
   echo "Instalando dependencias..."
   "$VENV_DIR/bin/python" -m pip install --upgrade pip >/dev/null
-  "$VENV_DIR/bin/pip" install -e ".[dev]"
+  if [ -f "$PROJECT_DIR/requirements-dev.lock" ]; then
+    "$VENV_DIR/bin/pip" install -r "$PROJECT_DIR/requirements-dev.lock"
+    "$VENV_DIR/bin/pip" install -e "$PROJECT_DIR" --no-deps
+  else
+    "$VENV_DIR/bin/pip" install -e "${PROJECT_DIR}[dev]"
+  fi
+fi
+
+if [ ! -x "$CLI_BIN" ]; then
+  echo "Erro: entrypoint nao encontrado apos instalacao: $CLI_BIN"
+  read -r -p "Pressione Enter para fechar..." _
+  exit 1
 fi
 
 echo
 echo "Executando pipeline..."
-"$VENV_DIR/bin/python" -m cut_precision.cli \
+"$CLI_BIN" \
   --template "$TEMPLATE" \
   --test "$TEST_IMAGE" \
   --out "$OUT_DIR"

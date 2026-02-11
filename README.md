@@ -12,7 +12,15 @@ Pipeline em Python para comparar contorno ideal (template) vs contorno real (rec
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -r requirements-dev.lock
+pip install -e . --no-deps
+```
+
+Para ambiente de runtime (sem dependencias de desenvolvimento):
+
+```bash
+pip install -r requirements.lock
+pip install -e . --no-deps
 ```
 
 ## Execução do pipeline
@@ -84,9 +92,37 @@ Em `--out`:
 - `error_map.png`
 - `error_hist.png`
 - `distances.csv`
+- `run.log` (texto)
+- `run.jsonl` (estruturado para ingestão)
 
 ## Testes
 
 ```bash
 .venv/bin/python -m pytest -q
+```
+
+## Qualidade
+
+Lint:
+
+```bash
+.venv/bin/ruff check src tests
+```
+
+Tipagem (escopo core):
+
+```bash
+.venv/bin/mypy
+```
+
+Cobertura dos modulos core (gate >= 85%):
+
+```bash
+.venv/bin/python -m pytest -q \
+  --cov=cut_precision.calibration \
+  --cov=cut_precision.io_utils \
+  --cov=cut_precision.report \
+  --cov=cut_precision.visualize \
+  --cov-report=term-missing \
+  --cov-fail-under=85
 ```

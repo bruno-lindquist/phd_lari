@@ -19,6 +19,14 @@ def _write_report(path: Path, mad_px: float, scale_px: float) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _resolve_template_path() -> str:
+    if Path("original.jpeg").exists():
+        return "original.jpeg"
+    if Path("original.jpg").exists():
+        return "original.jpg"
+    pytest.skip("Template image original.jpeg/original.jpg not found")
+
+
 def test_tau_cli_policy_balanced_outputs_policy_fields(tmp_path, capsys):
     _write_report(tmp_path / "good1.json", mad_px=8.0, scale_px=100.0)
     _write_report(tmp_path / "good2.json", mad_px=10.0, scale_px=100.0)
@@ -58,13 +66,11 @@ def test_pipeline_cli_labeled_policy_is_recorded_in_report(tmp_path):
     _write_report(tmp_path / "bad1.json", mad_px=35.0, scale_px=100.0)
     _write_report(tmp_path / "bad2.json", mad_px=40.0, scale_px=100.0)
 
-    template_path = "original.jpeg" if Path("original.jpeg").exists() else "original.jpg"
-
     out_dir = tmp_path / "out"
     rc = pipeline_main(
         [
             "--template",
-            template_path,
+            _resolve_template_path(),
             "--test",
             "teste_1.jpg",
             "--out",
@@ -88,3 +94,120 @@ def test_pipeline_cli_labeled_policy_is_recorded_in_report(tmp_path):
     assert tau_calibration["objective"] == "balanced_accuracy_then_gap"
     assert tau_calibration["constraints_satisfied"] is True
     assert tau_calibration["feasible_points"] >= 1
+
+
+def test_pipeline_and_tau_cli_target_mode_match_tau(tmp_path, capsys):
+    _write_report(tmp_path / "target1.json", mad_px=12.0, scale_px=100.0)
+    _write_report(tmp_path / "target2.json", mad_px=10.0, scale_px=100.0)
+
+    rc = tau_cli_main(
+        [
+            "--reports",
+            str(tmp_path / "target*.json"),
+            "--target-ipn",
+            "80",
+            "--statistic",
+            "median",
+            "--prefer-px",
+            "--tau-min",
+            "0.05",
+            "--tau-max",
+            "0.5",
+        ]
+    )
+    assert rc == 0
+    tau_payload = json.loads(capsys.readouterr().out)
+
+    out_dir = tmp_path / "pipeline_target"
+    rc = pipeline_main(
+        [
+            "--template",
+            _resolve_template_path(),
+            "--test",
+            "teste_1.jpg",
+            "--out",
+            str(out_dir),
+            "--tau-auto-reports",
+            str(tmp_path / "target*.json"),
+            "--tau-auto-target-ipn",
+            "80",
+            "--tau-auto-statistic",
+            "median",
+            "--tau-auto-prefer-px",
+            "--tau-auto-min",
+            "0.05",
+            "--tau-auto-max",
+            "0.5",
+            "--no-kd-validate",
+        ]
+    )
+    assert rc == 0
+    capsys.readouterr()
+
+    report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
+    assert report["metrics"]["tau"] == pytest.approx(tau_payload["tau"])
+    assert report["tau_calibration"]["mode"] == "auto_from_reports"
+    assert report["tau_calibration"]["statistic"] == tau_payload["statistic"]
+    assert report["tau_calibration"]["report_paths"] == tau_payload["report_paths"]
+
+
+def test_pipeline_and_tau_cli_labeled_mode_match_tau(tmp_path, capsys):
+    _write_report(tmp_path / "good1.json", mad_px=8.0, scale_px=100.0)
+    _write_report(tmp_path / "good2.json", mad_px=10.0, scale_px=100.0)
+    _write_report(tmp_path / "bad1.json", mad_px=35.0, scale_px=100.0)
+    _write_report(tmp_path / "bad2.json", mad_px=40.0, scale_px=100.0)
+
+    rc = tau_cli_main(
+        [
+            "--good-reports",
+            str(tmp_path / "good*.json"),
+            "--bad-reports",
+            str(tmp_path / "bad*.json"),
+            "--accept-ipn",
+            "70",
+            "--prefer-px",
+            "--tau-min",
+            "0.05",
+            "--tau-max",
+            "0.5",
+            "--policy",
+            "balanced",
+        ]
+    )
+    assert rc == 0
+    tau_payload = json.loads(capsys.readouterr().out)
+
+    out_dir = tmp_path / "pipeline_labeled"
+    rc = pipeline_main(
+        [
+            "--template",
+            _resolve_template_path(),
+            "--test",
+            "teste_1.jpg",
+            "--out",
+            str(out_dir),
+            "--tau-auto-good-reports",
+            str(tmp_path / "good*.json"),
+            "--tau-auto-bad-reports",
+            str(tmp_path / "bad*.json"),
+            "--tau-auto-accept-ipn",
+            "70",
+            "--tau-auto-policy",
+            "balanced",
+            "--tau-auto-prefer-px",
+            "--tau-auto-min",
+            "0.05",
+            "--tau-auto-max",
+            "0.5",
+            "--no-kd-validate",
+        ]
+    )
+    assert rc == 0
+    capsys.readouterr()
+
+    report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
+    tau_calibration = report["tau_calibration"]
+    assert report["metrics"]["tau"] == pytest.approx(tau_payload["tau"])
+    assert tau_calibration["policy"] == tau_payload["policy"]
+    assert tau_calibration["objective"] == tau_payload["objective"]
+    assert tau_calibration["constraints_satisfied"] == tau_payload["constraints_satisfied"]

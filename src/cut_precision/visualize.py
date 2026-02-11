@@ -11,7 +11,7 @@ import numpy as np
 
 
 def save_mask(path: str | Path, mask: np.ndarray) -> None:
-    cv2.imwrite(str(path), mask)
+    _write_image_or_raise(path, mask)
 
 
 def save_overlay(
@@ -37,7 +37,7 @@ def save_overlay(
             color=(0, 0, 255),
             thickness=2,
         )
-    cv2.imwrite(str(path), canvas)
+    _write_image_or_raise(path, canvas)
 
 
 def save_error_map(
@@ -46,6 +46,8 @@ def save_error_map(
     points: np.ndarray,
     distances: np.ndarray,
 ) -> None:
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     canvas = cv2.cvtColor(background_bgr, cv2.COLOR_BGR2RGB)
     plt.figure(figsize=(8, 8))
     plt.imshow(canvas)
@@ -54,16 +56,26 @@ def save_error_map(
         plt.colorbar(sc, label="Error (px)")
     plt.axis("off")
     plt.tight_layout()
-    plt.savefig(path, dpi=150)
+    plt.savefig(out_path, dpi=150)
     plt.close()
 
 
 def save_histogram(path: str | Path, distances: np.ndarray) -> None:
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.figure(figsize=(8, 4))
     plt.hist(distances, bins=40, color="#1f77b4", edgecolor="white")
     plt.xlabel("Distance (px)")
     plt.ylabel("Count")
     plt.title("Distance Distribution")
     plt.tight_layout()
-    plt.savefig(path, dpi=150)
+    plt.savefig(out_path, dpi=150)
     plt.close()
+
+
+def _write_image_or_raise(path: str | Path, image: np.ndarray) -> None:
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    write_ok = cv2.imwrite(str(out_path), image)
+    if not write_ok:
+        raise OSError(f"Could not write image artifact: {out_path}")
