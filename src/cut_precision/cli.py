@@ -37,12 +37,12 @@ from .register import (
 from .report import write_report
 from .resample import resample_closed_contour
 from .tau import (
-    TauCurve,
     calibrate_tau_from_labeled_reports,
-    calibrate_tau_from_reports,
     build_labeled_tau_curve,
+    calibrate_tau_from_reports,
     collect_report_paths,
 )
+from .tau_export import write_tau_curve_csv, write_tau_curve_png
 from .visualize import (
     save_distance_map,
     save_error_map,
@@ -253,11 +253,9 @@ def main(argv: list[str] | None = None) -> int:
         curve_csv = None
         curve_png = None
         if args.tau_auto_curve_csv:
-            _write_tau_curve_csv(args.tau_auto_curve_csv, curve)
-            curve_csv = str(Path(args.tau_auto_curve_csv).resolve())
+            curve_csv = write_tau_curve_csv(args.tau_auto_curve_csv, curve)
         if args.tau_auto_curve_png:
-            _write_tau_curve_png(args.tau_auto_curve_png, curve, best_tau=labeled.tau)
-            curve_png = str(Path(args.tau_auto_curve_png).resolve())
+            curve_png = write_tau_curve_png(args.tau_auto_curve_png, curve, best_tau=labeled.tau)
         cfg.metrics.tau = labeled.tau
         tau_context = {
             "mode": "auto_from_labeled_reports",
@@ -512,68 +510,6 @@ def _write_distances_csv(
         else:
             for idx, (pt, dpx) in enumerate(zip(points, distances_px, strict=True)):
                 writer.writerow([idx, float(pt[0]), float(pt[1]), float(dpx), float(dpx * mm_per_px)])
-
-
-def _write_tau_curve_csv(path: str, curve: TauCurve) -> None:
-    out = Path(path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with out.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(
-            [
-                "tau",
-                "threshold_ratio",
-                "balanced_accuracy",
-                "tpr",
-                "tnr",
-                "tp",
-                "fn",
-                "tn",
-                "fp",
-            ]
-        )
-        for p in curve.points:
-            writer.writerow(
-                [
-                    p.tau,
-                    p.threshold_ratio,
-                    p.balanced_accuracy,
-                    p.tpr,
-                    p.tnr,
-                    p.tp,
-                    p.fn,
-                    p.tn,
-                    p.fp,
-                ]
-            )
-
-
-def _write_tau_curve_png(path: str, curve: TauCurve, best_tau: float) -> None:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    out = Path(path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tau = [p.tau for p in curve.points]
-    bal = [p.balanced_accuracy for p in curve.points]
-    tpr = [p.tpr for p in curve.points]
-    tnr = [p.tnr for p in curve.points]
-    plt.figure(figsize=(9, 5))
-    plt.plot(tau, bal, label="Balanced Accuracy", color="#1f77b4", linewidth=2)
-    plt.plot(tau, tpr, label="TPR", color="#2ca02c", linestyle="--")
-    plt.plot(tau, tnr, label="TNR", color="#d62728", linestyle="--")
-    plt.axvline(best_tau, color="#111111", linestyle=":", label=f"Best tau={best_tau:.4f}")
-    plt.ylim(0.0, 1.02)
-    plt.xlabel("Tau")
-    plt.ylabel("Score")
-    plt.title(f"Tau Calibration Curve (accept_ipn={curve.accept_ipn:.1f}, units={curve.units})")
-    plt.grid(alpha=0.2)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(out, dpi=160)
-    plt.close()
 
 
 def _git_commit() -> str | None:

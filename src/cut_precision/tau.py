@@ -55,6 +55,9 @@ class TauCurvePoint:
     balanced_accuracy: float
     tpr: float
     tnr: float
+    mean_ipn_good: float
+    mean_ipn_bad: float
+    mean_ipn_gap: float
     tp: int
     fn: int
     tn: int
@@ -226,6 +229,8 @@ def build_labeled_tau_curve(
     points: list[TauCurvePoint] = []
     for tau in candidates:
         score = _evaluate_tau_classifier(good_values, bad_values, tau=tau, accept_ipn=accept_ipn)
+        mean_ipn_good = _mean_ipn_from_ratios(good_values, tau)
+        mean_ipn_bad = _mean_ipn_from_ratios(bad_values, tau)
         points.append(
             TauCurvePoint(
                 tau=float(tau),
@@ -233,6 +238,9 @@ def build_labeled_tau_curve(
                 balanced_accuracy=float(score["balanced_accuracy"]),
                 tpr=float(score["tpr"]),
                 tnr=float(score["tnr"]),
+                mean_ipn_good=float(mean_ipn_good),
+                mean_ipn_bad=float(mean_ipn_bad),
+                mean_ipn_gap=float(mean_ipn_good - mean_ipn_bad),
                 tp=int(score["tp"]),
                 fn=int(score["fn"]),
                 tn=int(score["tn"]),
@@ -410,6 +418,26 @@ def _evaluate_tau_classifier(
         "tnr": tnr,
         "balanced_accuracy": bal_acc,
     }
+
+
+def _mean_ipn_from_ratios(values: list[tuple[str, float]], tau: float) -> float:
+    if not values:
+        return 0.0
+    acc = 0.0
+    for _, ratio in values:
+        acc += _ipn_from_ratio(ratio, tau)
+    return acc / len(values)
+
+
+def _ipn_from_ratio(ratio: float, tau: float) -> float:
+    if tau <= 0.0:
+        return 0.0
+    raw = 100.0 * (1.0 - ratio / tau)
+    if raw < 0.0:
+        return 0.0
+    if raw > 100.0:
+        return 100.0
+    return raw
 
 
 def _aggregate(values: list[float], statistic_name: str) -> float:

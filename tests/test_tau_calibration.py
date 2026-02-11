@@ -3,6 +3,7 @@ import json
 import pytest
 
 from cut_precision.tau import (
+    build_labeled_tau_curve,
     calibrate_tau_from_labeled_reports,
     calibrate_tau_from_reports,
     collect_report_paths,
@@ -90,3 +91,30 @@ def test_calibrate_tau_from_labeled_reports_balanced_separation(tmp_path):
     assert out.tn == 2
     assert out.fp == 0
     assert out.fn == 0
+
+
+def test_build_labeled_tau_curve_has_ipn_tracks(tmp_path):
+    good1 = tmp_path / "good1.json"
+    bad1 = tmp_path / "bad1.json"
+    _write_report(good1, mad_px=10.0, scale_px=100.0)
+    _write_report(bad1, mad_px=40.0, scale_px=100.0)
+
+    curve = build_labeled_tau_curve(
+        good_report_paths=[str(good1)],
+        bad_report_paths=[str(bad1)],
+        accept_ipn=70.0,
+        prefer_mm=False,
+        tau_min=0.05,
+        tau_max=0.6,
+        max_points=50,
+    )
+    assert curve.points
+    taus = [p.tau for p in curve.points]
+    assert taus == sorted(taus)
+    # At the best operating point, good should score above bad.
+    best = max(curve.points, key=lambda p: p.balanced_accuracy)
+    assert best.mean_ipn_good > best.mean_ipn_bad
+    # Somewhere on the curve, the class gap must appear.
+    assert any(p.mean_ipn_good > p.mean_ipn_bad for p in curve.points)
+    assert all(0.0 <= p.mean_ipn_good <= 100.0 for p in curve.points)
+    assert all(0.0 <= p.mean_ipn_bad <= 100.0 for p in curve.points)
