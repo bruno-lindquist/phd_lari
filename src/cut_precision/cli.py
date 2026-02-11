@@ -21,8 +21,19 @@ from .distance import (
 )
 from .extract import extract_ideal_contour, extract_real_contour
 from .io_utils import ensure_dir, read_bgr_image
-from .metrics import bbox_diagonal, compute_ipn, compute_statistics, to_mm
-from .register import estimate_homography_ecc, estimate_homography_orb, warp_points
+from .metrics import (
+    bbox_diagonal,
+    compute_bidirectional_diagnostics,
+    compute_ipn,
+    compute_statistics,
+    to_mm,
+)
+from .register import (
+    estimate_homography_axes,
+    estimate_homography_ecc,
+    estimate_homography_orb,
+    warp_points,
+)
 from .report import write_report
 from .resample import resample_closed_contour
 from .visualize import (
@@ -81,6 +92,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     registration = estimate_homography_orb(template, test, cfg.registration)
+    if not registration.success and cfg.registration.use_axes_fallback:
+        axes_registration = estimate_homography_axes(template, test, cfg.registration)
+        if axes_registration.success:
+            registration = axes_registration
     if not registration.success and cfg.registration.use_ecc_fallback:
         ecc_registration = estimate_homography_ecc(template, test, cfg.registration)
         if ecc_registration.success:
@@ -109,10 +124,13 @@ def main(argv: list[str] | None = None) -> int:
     else:
         dist_px = sample_distance_map_nearest(dist_map, real_points)
 
+    kd_real_to_ideal = distances_via_kdtree(real_points, ideal_points)
+    kd_ideal_to_real = distances_via_kdtree(ideal_points, real_points)
+    diagnostics_px = compute_bidirectional_diagnostics(kd_real_to_ideal, kd_ideal_to_real)
+
     kd_validation = {"status": "disabled", "mean_abs_delta_px": None}
     if cfg.distance.validate_with_kdtree:
-        kd_dist = distances_via_kdtree(real_points, ideal_points)
-        check = validate_distance_methods(dist_px, kd_dist, cfg.distance.validation_tolerance_px)
+        check = validate_distance_methods(dist_px, kd_real_to_ideal, cfg.distance.validation_tolerance_px)
         kd_validation = {
             "status": check.status,
             "mean_abs_delta_px": check.mean_abs_delta_px,
@@ -122,6 +140,12 @@ def main(argv: list[str] | None = None) -> int:
     calib = estimate_mm_per_px_from_ruler(template, cfg.calibration)
     dist_mm = to_mm(dist_px, calib.mm_per_px)
     stats_mm = compute_statistics(dist_mm) if dist_mm is not None else None
+    if calib.mm_per_px is not None:
+        kd_real_to_ideal_mm = kd_real_to_ideal.astype(np.float64) * calib.mm_per_px
+        kd_ideal_to_real_mm = kd_ideal_to_real.astype(np.float64) * calib.mm_per_px
+        diagnostics_mm = compute_bidirectional_diagnostics(kd_real_to_ideal_mm, kd_ideal_to_real_mm)
+    else:
+        diagnostics_mm = None
 
     scale_px = bbox_diagonal(ideal_points)
     ipn_px, tolerance_px = compute_ipn(
@@ -177,6 +201,20 @@ def main(argv: list[str] | None = None) -> int:
             "validation": "kdtree" if cfg.distance.validate_with_kdtree else "disabled",
             "validation_status": kd_validation["status"],
             "validation_mean_abs_delta_px": kd_validation["mean_abs_delta_px"],
+        },
+        "diagnostics": {
+            "directed_mad_real_to_ideal_px": diagnostics_px.mad_real_to_ideal,
+            "directed_mad_ideal_to_real_px": diagnostics_px.mad_ideal_to_real,
+            "bidirectional_mad_px": diagnostics_px.bidirectional_mad,
+            "hausdorff_px": diagnostics_px.hausdorff,
+            "directed_mad_real_to_ideal_mm": (
+                diagnostics_mm.mad_real_to_ideal if diagnostics_mm else None
+            ),
+            "directed_mad_ideal_to_real_mm": (
+                diagnostics_mm.mad_ideal_to_real if diagnostics_mm else None
+            ),
+            "bidirectional_mad_mm": diagnostics_mm.bidirectional_mad if diagnostics_mm else None,
+            "hausdorff_mm": diagnostics_mm.hausdorff if diagnostics_mm else None,
         },
         "metrics": {
             "mad_px": stats_px.mad,

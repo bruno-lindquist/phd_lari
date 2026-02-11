@@ -14,6 +14,14 @@ class MetricsSummary:
     max_error: float
 
 
+@dataclass
+class ContourDiagnostics:
+    mad_real_to_ideal: float
+    mad_ideal_to_real: float
+    bidirectional_mad: float
+    hausdorff: float
+
+
 def compute_statistics(distances: np.ndarray) -> MetricsSummary:
     if distances.size == 0:
         raise ValueError("Distance array is empty")
@@ -56,3 +64,21 @@ def to_mm(values_px: np.ndarray, mm_per_px: float | None) -> np.ndarray | None:
     if mm_per_px is None:
         return None
     return values_px.astype(np.float64) * float(mm_per_px)
+
+
+def compute_bidirectional_diagnostics(
+    dist_real_to_ideal: np.ndarray, dist_ideal_to_real: np.ndarray
+) -> ContourDiagnostics:
+    if dist_real_to_ideal.size == 0 or dist_ideal_to_real.size == 0:
+        raise ValueError("Diagnostic arrays must be non-empty")
+
+    r2i = dist_real_to_ideal.astype(np.float64)
+    i2r = dist_ideal_to_real.astype(np.float64)
+    mad_r2i = float(np.mean(r2i))
+    mad_i2r = float(np.mean(i2r))
+    return ContourDiagnostics(
+        mad_real_to_ideal=mad_r2i,
+        mad_ideal_to_real=mad_i2r,
+        bidirectional_mad=float(0.5 * (mad_r2i + mad_i2r)),
+        hausdorff=float(max(np.max(r2i), np.max(i2r))),
+    )

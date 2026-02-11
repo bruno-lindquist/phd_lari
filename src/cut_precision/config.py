@@ -28,6 +28,13 @@ class RegistrationConfig:
     ransac_reproj_threshold: float = 3.0
     min_matches: int = 20
     min_inlier_ratio: float = 0.2
+    use_axes_fallback: bool = True
+    axes_canny_low: int = 50
+    axes_canny_high: int = 150
+    axes_hough_threshold: int = 120
+    axes_min_line_ratio: float = 0.20
+    axes_max_line_gap: int = 15
+    axes_angle_tolerance_deg: float = 20.0
     use_ecc_fallback: bool = True
     ecc_motion: str = "affine"
     ecc_iterations: int = 1500

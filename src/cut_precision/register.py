@@ -20,6 +20,13 @@ class RegistrationResult:
     reason: str | None = None
 
 
+@dataclass
+class _AxisFrame:
+    origin: np.ndarray
+    u_h: np.ndarray
+    u_v: np.ndarray
+
+
 def estimate_homography_orb(
     template_bgr: np.ndarray, test_bgr: np.ndarray, cfg: RegistrationConfig
 ) -> RegistrationResult:
@@ -105,6 +112,62 @@ def estimate_homography_orb(
         matches_used=len(good),
         inlier_ratio=inlier_ratio,
         reprojection_error_px=reproj,
+        reason=None,
+    )
+
+
+def estimate_homography_axes(
+    template_bgr: np.ndarray, test_bgr: np.ndarray, cfg: RegistrationConfig
+) -> RegistrationResult:
+    template_frame = _detect_axis_frame(template_bgr, cfg)
+    test_frame = _detect_axis_frame(test_bgr, cfg)
+    if template_frame is None or test_frame is None:
+        return RegistrationResult(
+            success=False,
+            homography=np.eye(3, dtype=np.float32),
+            method="identity_fallback",
+            matches_total=0,
+            matches_used=0,
+            inlier_ratio=0.0,
+            reprojection_error_px=None,
+            reason="axis_detection_failed",
+        )
+
+    src_basis = np.column_stack([test_frame.u_h, test_frame.u_v]).astype(np.float64)
+    dst_basis = np.column_stack([template_frame.u_h, template_frame.u_v]).astype(np.float64)
+
+    det = float(np.linalg.det(src_basis))
+    if abs(det) < 1e-6:
+        return RegistrationResult(
+            success=False,
+            homography=np.eye(3, dtype=np.float32),
+            method="identity_fallback",
+            matches_total=0,
+            matches_used=0,
+            inlier_ratio=0.0,
+            reprojection_error_px=None,
+            reason="axis_singular_basis",
+        )
+
+    linear = dst_basis @ np.linalg.inv(src_basis)
+    trans = template_frame.origin.reshape(2, 1) - linear @ test_frame.origin.reshape(2, 1)
+    homography = np.array(
+        [
+            [linear[0, 0], linear[0, 1], trans[0, 0]],
+            [linear[1, 0], linear[1, 1], trans[1, 0]],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+
+    return RegistrationResult(
+        success=True,
+        homography=homography,
+        method="axes_fallback",
+        matches_total=0,
+        matches_used=0,
+        inlier_ratio=1.0,
+        reprojection_error_px=None,
         reason=None,
     )
 
@@ -195,6 +258,99 @@ def _compute_reprojection_error(
     diff = pred[:, 0, :] - dst_pts[:, 0, :]
     err = np.linalg.norm(diff, axis=1)
     return float(np.mean(err))
+
+
+def _detect_axis_frame(image_bgr: np.ndarray, cfg: RegistrationConfig) -> _AxisFrame | None:
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blur, cfg.axes_canny_low, cfg.axes_canny_high)
+    h, w = edges.shape[:2]
+    min_len = int(max(h, w) * cfg.axes_min_line_ratio)
+    lines = cv2.HoughLinesP(
+        edges,
+        rho=1.0,
+        theta=np.pi / 180.0,
+        threshold=cfg.axes_hough_threshold,
+        minLineLength=min_len,
+        maxLineGap=cfg.axes_max_line_gap,
+    )
+    if lines is None:
+        return None
+
+    horizontals: list[np.ndarray] = []
+    verticals: list[np.ndarray] = []
+    tol = float(cfg.axes_angle_tolerance_deg)
+
+    for line in lines[:, 0, :]:
+        x1, y1, x2, y2 = map(float, line.tolist())
+        dx, dy = x2 - x1, y2 - y1
+        length = float(np.hypot(dx, dy))
+        if length < min_len:
+            continue
+        angle = float(np.degrees(np.arctan2(dy, dx)))
+        angle_abs = abs(((angle + 180.0) % 180.0))
+        line_vec = np.array([x1, y1, x2, y2, length], dtype=np.float64)
+        if angle_abs <= tol or angle_abs >= (180.0 - tol):
+            horizontals.append(line_vec)
+        if abs(angle_abs - 90.0) <= tol:
+            verticals.append(line_vec)
+
+    if not horizontals or not verticals:
+        return None
+
+    h_line = max(horizontals, key=lambda l: float(l[4]))
+    v_line = max(verticals, key=lambda l: float(l[4]))
+
+    h_p1, h_p2 = h_line[:2], h_line[2:4]
+    v_p1, v_p2 = v_line[:2], v_line[2:4]
+    origin = _line_intersection(h_p1, h_p2, v_p1, v_p2)
+    if origin is None:
+        return None
+
+    u_h = _unit_direction(h_p1, h_p2)
+    u_v = _unit_direction(v_p1, v_p2)
+    if u_h is None or u_v is None:
+        return None
+    if u_h[0] < 0:
+        u_h = -u_h
+    if u_v[1] < 0:
+        u_v = -u_v
+
+    # Keep only near-orthogonal frames; rejects accidental long contour lines.
+    ortho = float(abs(np.dot(u_h, u_v)))
+    if ortho > np.cos(np.deg2rad(max(1.0, 90.0 - tol))):
+        return None
+
+    return _AxisFrame(
+        origin=origin.astype(np.float64),
+        u_h=u_h.astype(np.float64),
+        u_v=u_v.astype(np.float64),
+    )
+
+
+def _line_intersection(
+    p1: np.ndarray, p2: np.ndarray, p3: np.ndarray, p4: np.ndarray
+) -> np.ndarray | None:
+    x1, y1 = p1
+    x2, y2 = p2
+    x3, y3 = p3
+    x4, y4 = p4
+    den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if abs(den) < 1e-6:
+        return None
+    det1 = x1 * y2 - y1 * x2
+    det2 = x3 * y4 - y3 * x4
+    x = (det1 * (x3 - x4) - (x1 - x2) * det2) / den
+    y = (det1 * (y3 - y4) - (y1 - y2) * det2) / den
+    return np.array([x, y], dtype=np.float64)
+
+
+def _unit_direction(p1: np.ndarray, p2: np.ndarray) -> np.ndarray | None:
+    vec = (p2 - p1).astype(np.float64)
+    norm = float(np.linalg.norm(vec))
+    if norm < 1e-8:
+        return None
+    return vec / norm
 
 
 def _ecc_motion_mode(name: str) -> int:
