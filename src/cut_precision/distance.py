@@ -24,7 +24,7 @@ def build_distance_transform(
         isClosed=True,
         color=0,
         thickness=max(1, int(draw_thickness)),
-        lineType=cv2.LINE_AA,
+        lineType=cv2.LINE_8,
     )
     dist_map = cv2.distanceTransform(mask, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
     return dist_map.astype(np.float32)

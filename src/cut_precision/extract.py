@@ -128,32 +128,49 @@ def _remove_long_lines(binary: np.ndarray, cfg: ExtractionConfig) -> np.ndarray:
 
 def _select_best_contour(mask: np.ndarray, min_area_ratio: float) -> np.ndarray | None:
     h, w = mask.shape[:2]
-    min_area = min_area_ratio * h * w
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    if not contours:
+    min_area = float(min_area_ratio * h * w)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        (mask > 0).astype(np.uint8), connectivity=8
+    )
+    if num_labels <= 1:
         return None
 
     center = np.array([w / 2.0, h / 2.0], dtype=np.float64)
+    best_idx: int | None = None
     best_score = float("-inf")
-    best: np.ndarray | None = None
-    for contour in contours:
-        area = cv2.contourArea(contour)
+
+    for comp_idx in range(1, num_labels):
+        area = float(stats[comp_idx, cv2.CC_STAT_AREA])
         if area < min_area:
             continue
-        pts = contour[:, 0, :].astype(np.float64)
-        centroid = pts.mean(axis=0)
-        dist_center = np.linalg.norm(centroid - center)
-        x, y, cw, ch = cv2.boundingRect(contour)
+
+        x = int(stats[comp_idx, cv2.CC_STAT_LEFT])
+        y = int(stats[comp_idx, cv2.CC_STAT_TOP])
+        cw = int(stats[comp_idx, cv2.CC_STAT_WIDTH])
+        ch = int(stats[comp_idx, cv2.CC_STAT_HEIGHT])
+        centroid = centroids[comp_idx].astype(np.float64)
+
+        dist_center = float(np.linalg.norm(centroid - center))
         touches_border = x <= 1 or y <= 1 or (x + cw) >= (w - 1) or (y + ch) >= (h - 1)
         border_penalty = 0.5 * area if touches_border else 0.0
         score = area - 1.5 * dist_center - border_penalty
         if score > best_score:
             best_score = score
-            best = contour
+            best_idx = comp_idx
 
-    if best is None:
+    # Fallback: if strict threshold removes all candidates, use largest component.
+    if best_idx is None:
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        if areas.size == 0:
+            return None
+        best_idx = int(np.argmax(areas) + 1)
+
+    component_mask = np.where(labels == best_idx, 255, 0).astype(np.uint8)
+    contours, _ = cv2.findContours(component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
         return None
-    return best[:, 0, :].astype(np.float32)
+    contour = max(contours, key=lambda c: c.shape[0])
+    return contour[:, 0, :].astype(np.float32)
 
 
 def _largest_external_contour(mask: np.ndarray) -> np.ndarray | None:

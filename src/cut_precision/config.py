@@ -12,7 +12,7 @@ class ExtractionConfig:
     ideal_adaptive_c: int = 7
     ideal_close_kernel: int = 5
     ideal_dilate_kernel: int = 3
-    ideal_min_area_ratio: float = 0.01
+    ideal_min_area_ratio: float = 0.001
     line_removal_min_length_ratio: float = 0.3
     line_removal_thickness: int = 3
     real_lab_l_threshold: int = 95
@@ -28,6 +28,10 @@ class RegistrationConfig:
     ransac_reproj_threshold: float = 3.0
     min_matches: int = 20
     min_inlier_ratio: float = 0.2
+    use_ecc_fallback: bool = True
+    ecc_motion: str = "affine"
+    ecc_iterations: int = 1500
+    ecc_eps: float = 1e-6
 
 
 @dataclass
@@ -60,6 +64,7 @@ class MetricsConfig:
 class SamplingConfig:
     step_px: float = 1.5
     num_points: int | None = None
+    max_points: int = 20000
 
 
 @dataclass

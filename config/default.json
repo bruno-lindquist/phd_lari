@@ -4,7 +4,7 @@
     "ideal_adaptive_c": 7,
     "ideal_close_kernel": 5,
     "ideal_dilate_kernel": 3,
-    "ideal_min_area_ratio": 0.01,
+    "ideal_min_area_ratio": 0.001,
     "line_removal_min_length_ratio": 0.3,
     "line_removal_thickness": 3,
     "real_lab_l_threshold": 95,
@@ -17,7 +17,11 @@
     "knn_ratio": 0.75,
     "ransac_reproj_threshold": 3.0,
     "min_matches": 20,
-    "min_inlier_ratio": 0.2
+    "min_inlier_ratio": 0.2,
+    "use_ecc_fallback": true,
+    "ecc_motion": "affine",
+    "ecc_iterations": 1500,
+    "ecc_eps": 1e-06
   },
   "calibration": {
     "manual_mm_per_px": null,
@@ -41,6 +45,7 @@
   },
   "sampling": {
     "step_px": 1.5,
-    "num_points": null
+    "num_points": null,
+    "max_points": 20000
   }
 }

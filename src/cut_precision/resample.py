@@ -23,6 +23,7 @@ def resample_closed_contour(
     points: np.ndarray,
     step_px: float | None = 1.5,
     num_points: int | None = None,
+    max_points: int | None = 20000,
 ) -> np.ndarray:
     if points.shape[0] < 3:
         raise ValueError("Contour needs at least 3 points")
@@ -40,6 +41,8 @@ def resample_closed_contour(
         if step_px is None:
             raise ValueError("Provide either step_px or num_points")
         num_points = max(8, int(np.ceil(total_len / float(step_px))))
+    if max_points is not None:
+        num_points = min(int(num_points), int(max_points))
 
     target = np.linspace(0.0, total_len, num_points, endpoint=False)
     idx = np.searchsorted(arc, target, side="right") - 1

@@ -6,7 +6,6 @@ import argparse
 import csv
 import json
 import subprocess
-import sys
 
 import numpy as np
 
@@ -23,7 +22,7 @@ from .distance import (
 from .extract import extract_ideal_contour, extract_real_contour
 from .io_utils import ensure_dir, read_bgr_image
 from .metrics import bbox_diagonal, compute_ipn, compute_statistics, to_mm
-from .register import estimate_homography_orb, warp_points
+from .register import estimate_homography_ecc, estimate_homography_orb, warp_points
 from .report import write_report
 from .resample import resample_closed_contour
 from .visualize import (
@@ -82,13 +81,24 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     registration = estimate_homography_orb(template, test, cfg.registration)
-    real_points_aligned = warp_points(real.contour, registration.homography)
+    if not registration.success and cfg.registration.use_ecc_fallback:
+        ecc_registration = estimate_homography_ecc(template, test, cfg.registration)
+        if ecc_registration.success:
+            registration = ecc_registration
+    homography = registration.homography if registration.success else np.eye(3, dtype=np.float32)
+    real_points_aligned = warp_points(real.contour, homography)
 
     ideal_points = resample_closed_contour(
-        ideal.contour, step_px=cfg.sampling.step_px, num_points=cfg.sampling.num_points
+        ideal.contour,
+        step_px=cfg.sampling.step_px,
+        num_points=cfg.sampling.num_points,
+        max_points=cfg.sampling.max_points,
     )
     real_points = resample_closed_contour(
-        real_points_aligned, step_px=cfg.sampling.step_px, num_points=cfg.sampling.num_points
+        real_points_aligned,
+        step_px=cfg.sampling.step_px,
+        num_points=cfg.sampling.num_points,
+        max_points=cfg.sampling.max_points,
     )
 
     dist_map = build_distance_transform(
