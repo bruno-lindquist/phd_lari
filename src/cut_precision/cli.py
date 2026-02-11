@@ -36,6 +36,7 @@ from .register import (
 )
 from .report import write_report
 from .resample import resample_closed_contour
+from .tau import calibrate_tau_from_reports, collect_report_paths
 from .visualize import (
     save_distance_map,
     save_error_map,
@@ -55,6 +56,41 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-points", type=int, default=None, help="Fixed number of contour points")
     parser.add_argument("--tau", type=float, default=None, help="IPN tolerance factor (relative)")
     parser.add_argument(
+        "--tau-auto-reports",
+        nargs="+",
+        default=None,
+        help="Glob patterns for report.json files used to auto-calibrate tau",
+    )
+    parser.add_argument(
+        "--tau-auto-target-ipn",
+        type=float,
+        default=80.0,
+        help="Target IPN used when auto-calibrating tau from reports",
+    )
+    parser.add_argument(
+        "--tau-auto-statistic",
+        choices=["median", "mean", "p75"],
+        default="median",
+        help="Statistic for auto-calibration over multiple reports",
+    )
+    parser.add_argument(
+        "--tau-auto-prefer-px",
+        action="store_true",
+        help="Prefer px-based report metrics for tau auto-calibration",
+    )
+    parser.add_argument(
+        "--tau-auto-min",
+        type=float,
+        default=0.005,
+        help="Lower bound when auto-calibrating tau",
+    )
+    parser.add_argument(
+        "--tau-auto-max",
+        type=float,
+        default=0.5,
+        help="Upper bound when auto-calibrating tau",
+    )
+    parser.add_argument(
         "--manual-mm-per-px",
         type=float,
         default=None,
@@ -68,12 +104,44 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     cfg = AppConfig.from_path(args.config)
+    tau_context = {
+        "mode": "fixed",
+        "source": "config_or_cli",
+        "target_ipn": None,
+        "reports_used": 0,
+        "report_patterns": [],
+        "report_paths": [],
+        "statistic": None,
+        "units": None,
+    }
     if args.step_px is not None:
         cfg.sampling.step_px = args.step_px
     if args.num_points is not None:
         cfg.sampling.num_points = args.num_points
     if args.tau is not None:
         cfg.metrics.tau = args.tau
+        tau_context["source"] = "cli_tau"
+    if args.tau_auto_reports:
+        paths = collect_report_paths(args.tau_auto_reports)
+        calibration = calibrate_tau_from_reports(
+            report_paths=paths,
+            target_ipn=args.tau_auto_target_ipn,
+            prefer_mm=not args.tau_auto_prefer_px,
+            statistic_name=args.tau_auto_statistic,
+            tau_min=args.tau_auto_min,
+            tau_max=args.tau_auto_max,
+        )
+        cfg.metrics.tau = calibration.tau
+        tau_context = {
+            "mode": "auto_from_reports",
+            "source": "reports",
+            "target_ipn": calibration.target_ipn,
+            "reports_used": calibration.reports_used,
+            "report_patterns": list(args.tau_auto_reports),
+            "report_paths": [item.report_path for item in calibration.candidates],
+            "statistic": calibration.statistic,
+            "units": calibration.units,
+        }
     if args.manual_mm_per_px is not None:
         cfg.calibration.manual_mm_per_px = args.manual_mm_per_px
     if args.no_kd_validate:
@@ -243,6 +311,16 @@ def main(argv: list[str] | None = None) -> int:
             "tolerance_mm": tolerance_mm,
             "ipn_px": ipn_px,
             "ipn_mm": ipn_mm,
+        },
+        "tau_calibration": {
+            "mode": tau_context["mode"],
+            "source": tau_context["source"],
+            "target_ipn": tau_context["target_ipn"],
+            "reports_used": tau_context["reports_used"],
+            "report_patterns": tau_context["report_patterns"],
+            "report_paths": tau_context["report_paths"],
+            "statistic": tau_context["statistic"],
+            "units": tau_context["units"],
         },
         "artifacts": {
             "report_json": str((out_dir / "report.json").resolve()),
