@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "cut-precision"
 version = "0.1.0"
 description = "Compare ideal contour and real cut contour with objective metrics"
-readme = "plano_projeto_comparacao_corte.md"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.26",
