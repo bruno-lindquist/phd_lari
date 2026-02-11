@@ -3,22 +3,43 @@ from __future__ import annotations
 import argparse
 import json
 
-from .tau import calibrate_tau_from_reports, collect_report_paths
+from .tau import (
+    calibrate_tau_from_labeled_reports,
+    calibrate_tau_from_reports,
+    collect_report_paths,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Calibrate IPN tau from report.json files")
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument(
         "--reports",
         nargs="+",
-        required=True,
         help="One or more glob patterns pointing to report.json files",
+    )
+    mode.add_argument(
+        "--good-reports",
+        nargs="+",
+        help="Glob patterns for 'good' reference reports",
+    )
+    parser.add_argument(
+        "--bad-reports",
+        nargs="+",
+        default=None,
+        help="Glob patterns for 'bad' reference reports (required with --good-reports)",
     )
     parser.add_argument(
         "--target-ipn",
         type=float,
         default=80.0,
         help="Desired IPN for the reference reports (0-100)",
+    )
+    parser.add_argument(
+        "--accept-ipn",
+        type=float,
+        default=70.0,
+        help="Acceptance threshold used for labeled calibration",
     )
     parser.add_argument(
         "--statistic",
@@ -34,26 +55,61 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    paths = collect_report_paths(args.reports)
-    result = calibrate_tau_from_reports(
-        report_paths=paths,
-        target_ipn=args.target_ipn,
-        prefer_mm=not args.prefer_px,
-        statistic_name=args.statistic,
-        tau_min=args.tau_min,
-        tau_max=args.tau_max,
-    )
-    payload = {
-        "tau": result.tau,
-        "units": result.units,
-        "reports_used": result.reports_used,
-        "target_ipn": result.target_ipn,
-        "statistic": result.statistic,
-        "tau_min": result.tau_min,
-        "tau_max": result.tau_max,
-        "report_paths": [c.report_path for c in result.candidates],
-        "tau_candidates": [c.tau for c in result.candidates],
-    }
+    if args.reports:
+        paths = collect_report_paths(args.reports)
+        result = calibrate_tau_from_reports(
+            report_paths=paths,
+            target_ipn=args.target_ipn,
+            prefer_mm=not args.prefer_px,
+            statistic_name=args.statistic,
+            tau_min=args.tau_min,
+            tau_max=args.tau_max,
+        )
+        payload = {
+            "mode": "target_ipn",
+            "tau": result.tau,
+            "units": result.units,
+            "reports_used": result.reports_used,
+            "target_ipn": result.target_ipn,
+            "statistic": result.statistic,
+            "tau_min": result.tau_min,
+            "tau_max": result.tau_max,
+            "report_paths": [c.report_path for c in result.candidates],
+            "tau_candidates": [c.tau for c in result.candidates],
+        }
+    else:
+        if not args.bad_reports:
+            raise ValueError("--bad-reports is required when --good-reports is used")
+        good_paths = collect_report_paths(args.good_reports)
+        bad_paths = collect_report_paths(args.bad_reports)
+        result = calibrate_tau_from_labeled_reports(
+            good_report_paths=good_paths,
+            bad_report_paths=bad_paths,
+            accept_ipn=args.accept_ipn,
+            prefer_mm=not args.prefer_px,
+            tau_min=args.tau_min,
+            tau_max=args.tau_max,
+        )
+        payload = {
+            "mode": "labeled",
+            "tau": result.tau,
+            "units": result.units,
+            "good_reports_used": result.good_reports_used,
+            "bad_reports_used": result.bad_reports_used,
+            "accept_ipn": result.accept_ipn,
+            "objective": result.objective,
+            "balanced_accuracy": result.balanced_accuracy,
+            "tpr": result.tpr,
+            "tnr": result.tnr,
+            "tp": result.tp,
+            "fn": result.fn,
+            "tn": result.tn,
+            "fp": result.fp,
+            "tau_min": result.tau_min,
+            "tau_max": result.tau_max,
+            "good_paths": result.good_paths,
+            "bad_paths": result.bad_paths,
+        }
     print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 

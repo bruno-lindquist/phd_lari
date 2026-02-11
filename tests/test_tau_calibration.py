@@ -2,7 +2,11 @@ import json
 
 import pytest
 
-from cut_precision.tau import calibrate_tau_from_reports, collect_report_paths
+from cut_precision.tau import (
+    calibrate_tau_from_labeled_reports,
+    calibrate_tau_from_reports,
+    collect_report_paths,
+)
 
 
 def _write_report(path, mad_px, scale_px, mad_mm=None, scale_mm=None):
@@ -58,3 +62,31 @@ def test_calibrate_tau_from_reports_clamps(tmp_path):
         tau_max=0.2,
     )
     assert out.tau == 0.2
+
+
+def test_calibrate_tau_from_labeled_reports_balanced_separation(tmp_path):
+    good1 = tmp_path / "good1.json"
+    good2 = tmp_path / "good2.json"
+    bad1 = tmp_path / "bad1.json"
+    bad2 = tmp_path / "bad2.json"
+    _write_report(good1, mad_px=8.0, scale_px=100.0)
+    _write_report(good2, mad_px=10.0, scale_px=100.0)
+    _write_report(bad1, mad_px=40.0, scale_px=100.0)
+    _write_report(bad2, mad_px=45.0, scale_px=100.0)
+
+    out = calibrate_tau_from_labeled_reports(
+        good_report_paths=[str(good1), str(good2)],
+        bad_report_paths=[str(bad1), str(bad2)],
+        accept_ipn=70.0,
+        prefer_mm=False,
+        tau_min=0.05,
+        tau_max=0.5,
+    )
+    assert out.units == "px"
+    assert out.good_reports_used == 2
+    assert out.bad_reports_used == 2
+    assert out.balanced_accuracy == pytest.approx(1.0)
+    assert out.tp == 2
+    assert out.tn == 2
+    assert out.fp == 0
+    assert out.fn == 0

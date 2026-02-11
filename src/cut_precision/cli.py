@@ -36,7 +36,11 @@ from .register import (
 )
 from .report import write_report
 from .resample import resample_closed_contour
-from .tau import calibrate_tau_from_reports, collect_report_paths
+from .tau import (
+    calibrate_tau_from_labeled_reports,
+    calibrate_tau_from_reports,
+    collect_report_paths,
+)
 from .visualize import (
     save_distance_map,
     save_error_map,
@@ -74,6 +78,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Statistic for auto-calibration over multiple reports",
     )
     parser.add_argument(
+        "--tau-auto-good-reports",
+        nargs="+",
+        default=None,
+        help="Glob patterns for 'good' labeled reports (class-based tau calibration)",
+    )
+    parser.add_argument(
+        "--tau-auto-bad-reports",
+        nargs="+",
+        default=None,
+        help="Glob patterns for 'bad' labeled reports (class-based tau calibration)",
+    )
+    parser.add_argument(
+        "--tau-auto-accept-ipn",
+        type=float,
+        default=70.0,
+        help="IPN acceptance threshold used for class-based tau calibration",
+    )
+    parser.add_argument(
         "--tau-auto-prefer-px",
         action="store_true",
         help="Prefer px-based report metrics for tau auto-calibration",
@@ -108,11 +130,26 @@ def main(argv: list[str] | None = None) -> int:
         "mode": "fixed",
         "source": "config_or_cli",
         "target_ipn": None,
+        "accept_ipn": None,
         "reports_used": 0,
+        "good_reports_used": 0,
+        "bad_reports_used": 0,
         "report_patterns": [],
+        "good_report_patterns": [],
+        "bad_report_patterns": [],
         "report_paths": [],
+        "good_report_paths": [],
+        "bad_report_paths": [],
         "statistic": None,
         "units": None,
+        "objective": None,
+        "balanced_accuracy": None,
+        "tpr": None,
+        "tnr": None,
+        "tp": None,
+        "fn": None,
+        "tn": None,
+        "fp": None,
     }
     if args.step_px is not None:
         cfg.sampling.step_px = args.step_px
@@ -121,6 +158,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.tau is not None:
         cfg.metrics.tau = args.tau
         tau_context["source"] = "cli_tau"
+    if args.tau_auto_reports and (args.tau_auto_good_reports or args.tau_auto_bad_reports):
+        raise ValueError(
+            "Use either --tau-auto-reports OR (--tau-auto-good-reports with --tau-auto-bad-reports)"
+        )
     if args.tau_auto_reports:
         paths = collect_report_paths(args.tau_auto_reports)
         calibration = calibrate_tau_from_reports(
@@ -136,11 +177,67 @@ def main(argv: list[str] | None = None) -> int:
             "mode": "auto_from_reports",
             "source": "reports",
             "target_ipn": calibration.target_ipn,
+            "accept_ipn": None,
             "reports_used": calibration.reports_used,
+            "good_reports_used": 0,
+            "bad_reports_used": 0,
             "report_patterns": list(args.tau_auto_reports),
+            "good_report_patterns": [],
+            "bad_report_patterns": [],
             "report_paths": [item.report_path for item in calibration.candidates],
+            "good_report_paths": [],
+            "bad_report_paths": [],
             "statistic": calibration.statistic,
             "units": calibration.units,
+            "objective": None,
+            "balanced_accuracy": None,
+            "tpr": None,
+            "tnr": None,
+            "tp": None,
+            "fn": None,
+            "tn": None,
+            "fp": None,
+        }
+    if args.tau_auto_good_reports or args.tau_auto_bad_reports:
+        if not (args.tau_auto_good_reports and args.tau_auto_bad_reports):
+            raise ValueError(
+                "Both --tau-auto-good-reports and --tau-auto-bad-reports are required together"
+            )
+        good_paths = collect_report_paths(args.tau_auto_good_reports)
+        bad_paths = collect_report_paths(args.tau_auto_bad_reports)
+        labeled = calibrate_tau_from_labeled_reports(
+            good_report_paths=good_paths,
+            bad_report_paths=bad_paths,
+            accept_ipn=args.tau_auto_accept_ipn,
+            prefer_mm=not args.tau_auto_prefer_px,
+            tau_min=args.tau_auto_min,
+            tau_max=args.tau_auto_max,
+        )
+        cfg.metrics.tau = labeled.tau
+        tau_context = {
+            "mode": "auto_from_labeled_reports",
+            "source": "reports_labeled",
+            "target_ipn": None,
+            "accept_ipn": labeled.accept_ipn,
+            "reports_used": labeled.good_reports_used + labeled.bad_reports_used,
+            "good_reports_used": labeled.good_reports_used,
+            "bad_reports_used": labeled.bad_reports_used,
+            "report_patterns": [],
+            "good_report_patterns": list(args.tau_auto_good_reports),
+            "bad_report_patterns": list(args.tau_auto_bad_reports),
+            "report_paths": [],
+            "good_report_paths": labeled.good_paths,
+            "bad_report_paths": labeled.bad_paths,
+            "statistic": None,
+            "units": labeled.units,
+            "objective": labeled.objective,
+            "balanced_accuracy": labeled.balanced_accuracy,
+            "tpr": labeled.tpr,
+            "tnr": labeled.tnr,
+            "tp": labeled.tp,
+            "fn": labeled.fn,
+            "tn": labeled.tn,
+            "fp": labeled.fp,
         }
     if args.manual_mm_per_px is not None:
         cfg.calibration.manual_mm_per_px = args.manual_mm_per_px
@@ -316,11 +413,26 @@ def main(argv: list[str] | None = None) -> int:
             "mode": tau_context["mode"],
             "source": tau_context["source"],
             "target_ipn": tau_context["target_ipn"],
+            "accept_ipn": tau_context["accept_ipn"],
             "reports_used": tau_context["reports_used"],
+            "good_reports_used": tau_context["good_reports_used"],
+            "bad_reports_used": tau_context["bad_reports_used"],
             "report_patterns": tau_context["report_patterns"],
+            "good_report_patterns": tau_context["good_report_patterns"],
+            "bad_report_patterns": tau_context["bad_report_patterns"],
             "report_paths": tau_context["report_paths"],
+            "good_report_paths": tau_context["good_report_paths"],
+            "bad_report_paths": tau_context["bad_report_paths"],
             "statistic": tau_context["statistic"],
             "units": tau_context["units"],
+            "objective": tau_context["objective"],
+            "balanced_accuracy": tau_context["balanced_accuracy"],
+            "tpr": tau_context["tpr"],
+            "tnr": tau_context["tnr"],
+            "tp": tau_context["tp"],
+            "fn": tau_context["fn"],
+            "tn": tau_context["tn"],
+            "fp": tau_context["fp"],
         },
         "artifacts": {
             "report_json": str((out_dir / "report.json").resolve()),
