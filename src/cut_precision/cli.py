@@ -37,10 +37,12 @@ from .register import (
 from .report import write_report
 from .resample import resample_closed_contour
 from .tau import (
+    TAU_POLICY_PRESETS,
     calibrate_tau_from_labeled_reports,
     build_labeled_tau_curve,
     calibrate_tau_from_reports,
     collect_report_paths,
+    resolve_labeled_policy,
 )
 from .tau_export import write_tau_curve_csv, write_tau_curve_png
 from .visualize import (
@@ -98,9 +100,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="IPN acceptance threshold used for class-based tau calibration",
     )
     parser.add_argument(
+        "--tau-auto-policy",
+        choices=sorted(TAU_POLICY_PRESETS.keys()),
+        default=None,
+        help="Preset constraints/objective for labeled tau auto-calibration",
+    )
+    parser.add_argument(
         "--tau-auto-objective",
         choices=["balanced_accuracy", "balanced_accuracy_then_gap", "gap_then_balanced_accuracy"],
-        default="balanced_accuracy_then_gap",
+        default=None,
         help="Objective used for labeled tau auto-calibration",
     )
     parser.add_argument(
@@ -177,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
     tau_context = {
         "mode": "fixed",
         "source": "config_or_cli",
+        "policy": "custom",
         "target_ipn": None,
         "accept_ipn": None,
         "reports_used": 0,
@@ -241,6 +250,7 @@ def main(argv: list[str] | None = None) -> int:
         tau_context = {
             "mode": "auto_from_reports",
             "source": "reports",
+            "policy": "custom",
             "target_ipn": calibration.target_ipn,
             "accept_ipn": None,
             "reports_used": calibration.reports_used,
@@ -283,6 +293,14 @@ def main(argv: list[str] | None = None) -> int:
             )
         good_paths = collect_report_paths(args.tau_auto_good_reports)
         bad_paths = collect_report_paths(args.tau_auto_bad_reports)
+        policy_cfg = resolve_labeled_policy(
+            policy=args.tau_auto_policy,
+            objective=args.tau_auto_objective,
+            max_mean_ipn_bad=args.tau_auto_max_mean_ipn_bad,
+            min_mean_ipn_gap=args.tau_auto_min_mean_ipn_gap,
+            min_tpr=args.tau_auto_min_tpr,
+            min_tnr=args.tau_auto_min_tnr,
+        )
         labeled = calibrate_tau_from_labeled_reports(
             good_report_paths=good_paths,
             bad_report_paths=bad_paths,
@@ -290,11 +308,11 @@ def main(argv: list[str] | None = None) -> int:
             prefer_mm=not args.tau_auto_prefer_px,
             tau_min=args.tau_auto_min,
             tau_max=args.tau_auto_max,
-            objective=args.tau_auto_objective,
-            max_mean_ipn_bad=args.tau_auto_max_mean_ipn_bad,
-            min_mean_ipn_gap=args.tau_auto_min_mean_ipn_gap,
-            min_tpr=args.tau_auto_min_tpr,
-            min_tnr=args.tau_auto_min_tnr,
+            objective=policy_cfg["objective"],
+            max_mean_ipn_bad=policy_cfg["max_mean_ipn_bad"],
+            min_mean_ipn_gap=policy_cfg["min_mean_ipn_gap"],
+            min_tpr=policy_cfg["min_tpr"],
+            min_tnr=policy_cfg["min_tnr"],
         )
         curve = build_labeled_tau_curve(
             good_report_paths=good_paths,
@@ -315,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
         tau_context = {
             "mode": "auto_from_labeled_reports",
             "source": "reports_labeled",
+            "policy": policy_cfg["policy"],
             "target_ipn": None,
             "accept_ipn": labeled.accept_ipn,
             "reports_used": labeled.good_reports_used + labeled.bad_reports_used,
@@ -523,6 +542,7 @@ def main(argv: list[str] | None = None) -> int:
         "tau_calibration": {
             "mode": tau_context["mode"],
             "source": tau_context["source"],
+            "policy": tau_context["policy"],
             "target_ipn": tau_context["target_ipn"],
             "accept_ipn": tau_context["accept_ipn"],
             "reports_used": tau_context["reports_used"],

@@ -3,10 +3,12 @@ import json
 import pytest
 
 from cut_precision.tau import (
+    TAU_POLICY_PRESETS,
     build_labeled_tau_curve,
     calibrate_tau_from_labeled_reports,
     calibrate_tau_from_reports,
     collect_report_paths,
+    resolve_labeled_policy,
 )
 
 
@@ -165,3 +167,38 @@ def test_labeled_calibration_constraint_fallback(tmp_path):
     assert out.constraints_satisfied is False
     assert out.feasible_points == 0
     assert out.fallback_reason == "no_feasible_points_for_constraints"
+
+
+def test_resolve_labeled_policy_custom_defaults():
+    out = resolve_labeled_policy(
+        policy=None,
+        objective=None,
+        max_mean_ipn_bad=None,
+        min_mean_ipn_gap=None,
+        min_tpr=None,
+        min_tnr=None,
+    )
+    assert out["policy"] == "custom"
+    assert out["objective"] == "balanced_accuracy_then_gap"
+    assert out["max_mean_ipn_bad"] is None
+    assert out["min_mean_ipn_gap"] is None
+    assert out["min_tpr"] is None
+    assert out["min_tnr"] is None
+
+
+def test_resolve_labeled_policy_preset_with_overrides():
+    strict = TAU_POLICY_PRESETS["strict"]
+    out = resolve_labeled_policy(
+        policy="strict",
+        objective=None,
+        max_mean_ipn_bad=None,
+        min_mean_ipn_gap=None,
+        min_tpr=0.9,
+        min_tnr=None,
+    )
+    assert out["policy"] == "strict"
+    assert out["objective"] == strict.objective
+    assert out["max_mean_ipn_bad"] == strict.max_mean_ipn_bad
+    assert out["min_mean_ipn_gap"] == strict.min_mean_ipn_gap
+    assert out["min_tpr"] == 0.9
+    assert out["min_tnr"] == strict.min_tnr

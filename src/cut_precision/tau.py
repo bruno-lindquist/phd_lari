@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 import glob
 import json
 import statistics
@@ -72,6 +72,44 @@ class TauCurvePoint:
     fn: int
     tn: int
     fp: int
+
+
+@dataclass(frozen=True)
+class TauPolicyPreset:
+    name: str
+    objective: str
+    max_mean_ipn_bad: float | None
+    min_mean_ipn_gap: float | None
+    min_tpr: float | None
+    min_tnr: float | None
+
+
+TAU_POLICY_PRESETS: dict[str, TauPolicyPreset] = {
+    "strict": TauPolicyPreset(
+        name="strict",
+        objective="balanced_accuracy_then_gap",
+        max_mean_ipn_bad=15.0,
+        min_mean_ipn_gap=20.0,
+        min_tpr=0.75,
+        min_tnr=0.80,
+    ),
+    "balanced": TauPolicyPreset(
+        name="balanced",
+        objective="balanced_accuracy_then_gap",
+        max_mean_ipn_bad=25.0,
+        min_mean_ipn_gap=10.0,
+        min_tpr=0.60,
+        min_tnr=0.60,
+    ),
+    "lenient": TauPolicyPreset(
+        name="lenient",
+        objective="balanced_accuracy",
+        max_mean_ipn_bad=40.0,
+        min_mean_ipn_gap=0.0,
+        min_tpr=None,
+        min_tnr=None,
+    ),
+}
 
 
 def collect_report_paths(patterns: Iterable[str]) -> list[str]:
@@ -286,6 +324,58 @@ def build_labeled_tau_curve(
         bad_reports_used=len(bad_values),
         points=points,
     )
+
+
+def resolve_labeled_policy(
+    policy: str | None,
+    objective: str | None,
+    max_mean_ipn_bad: float | None,
+    min_mean_ipn_gap: float | None,
+    min_tpr: float | None,
+    min_tnr: float | None,
+) -> dict[str, Any]:
+    preset = None
+    policy_name = "custom"
+    if policy is not None:
+        policy_key = policy.strip().lower()
+        preset = TAU_POLICY_PRESETS.get(policy_key)
+        if preset is None:
+            raise ValueError(
+                f"Invalid policy: {policy}. Valid: {sorted(TAU_POLICY_PRESETS.keys())}"
+            )
+        policy_name = preset.name
+
+    effective = {
+        "policy": policy_name,
+        "objective": (
+            objective
+            if objective is not None
+            else (preset.objective if preset is not None else "balanced_accuracy_then_gap")
+        ),
+        "max_mean_ipn_bad": (
+            max_mean_ipn_bad
+            if max_mean_ipn_bad is not None
+            else (preset.max_mean_ipn_bad if preset is not None else None)
+        ),
+        "min_mean_ipn_gap": (
+            min_mean_ipn_gap
+            if min_mean_ipn_gap is not None
+            else (preset.min_mean_ipn_gap if preset is not None else None)
+        ),
+        "min_tpr": min_tpr if min_tpr is not None else (preset.min_tpr if preset is not None else None),
+        "min_tnr": min_tnr if min_tnr is not None else (preset.min_tnr if preset is not None else None),
+    }
+
+    _validate_objective(str(effective["objective"]))
+    _validate_optional_threshold(
+        _as_float_or_none(effective["max_mean_ipn_bad"]), "max_mean_ipn_bad"
+    )
+    _validate_optional_threshold(
+        _as_float_or_none(effective["min_mean_ipn_gap"]), "min_mean_ipn_gap"
+    )
+    _validate_optional_rate(_as_float_or_none(effective["min_tpr"]), "min_tpr")
+    _validate_optional_rate(_as_float_or_none(effective["min_tnr"]), "min_tnr")
+    return effective
 
 
 def _tau_from_single_report(
@@ -572,3 +662,9 @@ def _validate_objective(objective: str) -> None:
     valid = {"balanced_accuracy", "balanced_accuracy_then_gap", "gap_then_balanced_accuracy"}
     if objective not in valid:
         raise ValueError(f"Invalid objective: {objective}. Valid: {sorted(valid)}")
+
+
+def _as_float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
