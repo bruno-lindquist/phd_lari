@@ -118,3 +118,50 @@ def test_build_labeled_tau_curve_has_ipn_tracks(tmp_path):
     assert any(p.mean_ipn_good > p.mean_ipn_bad for p in curve.points)
     assert all(0.0 <= p.mean_ipn_good <= 100.0 for p in curve.points)
     assert all(0.0 <= p.mean_ipn_bad <= 100.0 for p in curve.points)
+
+
+def test_labeled_calibration_with_constraints(tmp_path):
+    good1 = tmp_path / "good1.json"
+    good2 = tmp_path / "good2.json"
+    bad1 = tmp_path / "bad1.json"
+    bad2 = tmp_path / "bad2.json"
+    _write_report(good1, mad_px=20.0, scale_px=100.0)
+    _write_report(good2, mad_px=22.0, scale_px=100.0)
+    _write_report(bad1, mad_px=24.0, scale_px=100.0)
+    _write_report(bad2, mad_px=26.0, scale_px=100.0)
+
+    out = calibrate_tau_from_labeled_reports(
+        good_report_paths=[str(good1), str(good2)],
+        bad_report_paths=[str(bad1), str(bad2)],
+        accept_ipn=70.0,
+        prefer_mm=False,
+        tau_min=0.05,
+        tau_max=1.0,
+        objective="balanced_accuracy_then_gap",
+        max_mean_ipn_bad=40.0,
+    )
+    assert out.constraints_satisfied is True
+    assert out.feasible_points > 0
+    assert out.mean_ipn_bad <= 40.0
+    assert out.objective == "balanced_accuracy_then_gap"
+
+
+def test_labeled_calibration_constraint_fallback(tmp_path):
+    good = tmp_path / "good.json"
+    bad = tmp_path / "bad.json"
+    _write_report(good, mad_px=20.0, scale_px=100.0)
+    _write_report(bad, mad_px=40.0, scale_px=100.0)
+
+    out = calibrate_tau_from_labeled_reports(
+        good_report_paths=[str(good)],
+        bad_report_paths=[str(bad)],
+        accept_ipn=70.0,
+        prefer_mm=False,
+        tau_min=0.05,
+        tau_max=1.0,
+        max_mean_ipn_bad=1.0,
+        min_tpr=1.0,
+    )
+    assert out.constraints_satisfied is False
+    assert out.feasible_points == 0
+    assert out.fallback_reason == "no_feasible_points_for_constraints"

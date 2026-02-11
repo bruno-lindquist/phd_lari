@@ -37,9 +37,19 @@ class TauClassCalibrationResult:
     tau_min: float
     tau_max: float
     objective: str
+    max_mean_ipn_bad: float | None
+    min_mean_ipn_gap: float | None
+    min_tpr: float | None
+    min_tnr: float | None
+    constraints_satisfied: bool
+    feasible_points: int
+    fallback_reason: str | None
     balanced_accuracy: float
     tpr: float
     tnr: float
+    mean_ipn_good: float
+    mean_ipn_bad: float
+    mean_ipn_gap: float
     tp: int
     fn: int
     tn: int
@@ -121,6 +131,11 @@ def calibrate_tau_from_labeled_reports(
     prefer_mm: bool = True,
     tau_min: float = 0.005,
     tau_max: float = 0.2,
+    objective: str = "balanced_accuracy_then_gap",
+    max_mean_ipn_bad: float | None = None,
+    min_mean_ipn_gap: float | None = None,
+    min_tpr: float | None = None,
+    min_tnr: float | None = None,
 ) -> TauClassCalibrationResult:
     if not (0.0 < accept_ipn < 100.0):
         raise ValueError("accept_ipn must be between 0 and 100")
@@ -128,6 +143,11 @@ def calibrate_tau_from_labeled_reports(
         raise ValueError("tau_min must be > 0")
     if tau_max <= tau_min:
         raise ValueError("tau_max must be greater than tau_min")
+    _validate_objective(objective)
+    _validate_optional_threshold(max_mean_ipn_bad, "max_mean_ipn_bad")
+    _validate_optional_threshold(min_mean_ipn_gap, "min_mean_ipn_gap")
+    _validate_optional_rate(min_tpr, "min_tpr")
+    _validate_optional_rate(min_tnr, "min_tnr")
 
     good_paths = [str(Path(p).resolve()) for p in good_report_paths]
     bad_paths = [str(Path(p).resolve()) for p in bad_report_paths]
@@ -148,15 +168,14 @@ def calibrate_tau_from_labeled_reports(
     if not curve.points:
         raise ValueError("No tau candidates available for labeled calibration")
 
-    best = None
-    for point in curve.points:
-        # Conservative tie-breaker: lower tau for same balanced accuracy.
-        key = (point.balanced_accuracy, -point.tau)
-        if best is None or key > best["key"]:
-            best = {"point": point, "key": key}
-
-    assert best is not None
-    point = best["point"]
+    point, constraints_satisfied, feasible_points, fallback_reason = _select_point_from_curve(
+        curve.points,
+        objective=objective,
+        max_mean_ipn_bad=max_mean_ipn_bad,
+        min_mean_ipn_gap=min_mean_ipn_gap,
+        min_tpr=min_tpr,
+        min_tnr=min_tnr,
+    )
     return TauClassCalibrationResult(
         tau=float(point.tau),
         units=units,
@@ -165,10 +184,20 @@ def calibrate_tau_from_labeled_reports(
         accept_ipn=float(accept_ipn),
         tau_min=float(tau_min),
         tau_max=float(tau_max),
-        objective="balanced_accuracy",
+        objective=objective,
+        max_mean_ipn_bad=max_mean_ipn_bad,
+        min_mean_ipn_gap=min_mean_ipn_gap,
+        min_tpr=min_tpr,
+        min_tnr=min_tnr,
+        constraints_satisfied=constraints_satisfied,
+        feasible_points=feasible_points,
+        fallback_reason=fallback_reason,
         balanced_accuracy=float(point.balanced_accuracy),
         tpr=float(point.tpr),
         tnr=float(point.tnr),
+        mean_ipn_good=float(point.mean_ipn_good),
+        mean_ipn_bad=float(point.mean_ipn_bad),
+        mean_ipn_gap=float(point.mean_ipn_gap),
         tp=int(point.tp),
         fn=int(point.fn),
         tn=int(point.tn),
@@ -420,6 +449,61 @@ def _evaluate_tau_classifier(
     }
 
 
+def _select_point_from_curve(
+    points: list[TauCurvePoint],
+    objective: str,
+    max_mean_ipn_bad: float | None,
+    min_mean_ipn_gap: float | None,
+    min_tpr: float | None,
+    min_tnr: float | None,
+) -> tuple[TauCurvePoint, bool, int, str | None]:
+    feasible: list[TauCurvePoint] = [
+        p
+        for p in points
+        if _is_feasible_point(
+            p,
+            max_mean_ipn_bad=max_mean_ipn_bad,
+            min_mean_ipn_gap=min_mean_ipn_gap,
+            min_tpr=min_tpr,
+            min_tnr=min_tnr,
+        )
+    ]
+
+    pool = feasible if feasible else points
+    best = max(pool, key=lambda p: _point_key(p, objective=objective))
+    if feasible:
+        return best, True, len(feasible), None
+    return best, False, 0, "no_feasible_points_for_constraints"
+
+
+def _is_feasible_point(
+    point: TauCurvePoint,
+    max_mean_ipn_bad: float | None,
+    min_mean_ipn_gap: float | None,
+    min_tpr: float | None,
+    min_tnr: float | None,
+) -> bool:
+    if max_mean_ipn_bad is not None and point.mean_ipn_bad > max_mean_ipn_bad:
+        return False
+    if min_mean_ipn_gap is not None and point.mean_ipn_gap < min_mean_ipn_gap:
+        return False
+    if min_tpr is not None and point.tpr < min_tpr:
+        return False
+    if min_tnr is not None and point.tnr < min_tnr:
+        return False
+    return True
+
+
+def _point_key(point: TauCurvePoint, objective: str) -> tuple[float, ...]:
+    # Final element keeps conservative preference for lower tau on ties.
+    if objective == "balanced_accuracy":
+        return (point.balanced_accuracy, -point.tau)
+    if objective == "gap_then_balanced_accuracy":
+        return (point.mean_ipn_gap, point.balanced_accuracy, -point.mean_ipn_bad, -point.tau)
+    # Default and recommended: balanced score first, then class separation.
+    return (point.balanced_accuracy, point.mean_ipn_gap, -point.mean_ipn_bad, -point.tau)
+
+
 def _mean_ipn_from_ratios(values: list[tuple[str, float]], tau: float) -> float:
     if not values:
         return 0.0
@@ -468,3 +552,23 @@ def np_linspace_indices(n: int, k: int) -> list[int]:
         if not out or idx != out[-1]:
             out.append(idx)
     return out
+
+
+def _validate_optional_threshold(value: float | None, name: str) -> None:
+    if value is None:
+        return
+    if value < 0.0:
+        raise ValueError(f"{name} must be >= 0")
+
+
+def _validate_optional_rate(value: float | None, name: str) -> None:
+    if value is None:
+        return
+    if value < 0.0 or value > 1.0:
+        raise ValueError(f"{name} must be within [0, 1]")
+
+
+def _validate_objective(objective: str) -> None:
+    valid = {"balanced_accuracy", "balanced_accuracy_then_gap", "gap_then_balanced_accuracy"}
+    if objective not in valid:
+        raise ValueError(f"Invalid objective: {objective}. Valid: {sorted(valid)}")

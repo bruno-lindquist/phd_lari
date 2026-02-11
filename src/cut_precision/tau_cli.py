@@ -53,6 +53,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tau-min", type=float, default=0.005)
     parser.add_argument("--tau-max", type=float, default=0.2)
     parser.add_argument(
+        "--objective",
+        choices=["balanced_accuracy", "balanced_accuracy_then_gap", "gap_then_balanced_accuracy"],
+        default="balanced_accuracy_then_gap",
+        help="Objective used to select tau in labeled mode",
+    )
+    parser.add_argument(
+        "--max-mean-ipn-bad",
+        type=float,
+        default=None,
+        help="Optional constraint for labeled mode",
+    )
+    parser.add_argument(
+        "--min-mean-ipn-gap",
+        type=float,
+        default=None,
+        help="Optional constraint for labeled mode",
+    )
+    parser.add_argument("--min-tpr", type=float, default=None, help="Optional constraint for labeled mode")
+    parser.add_argument("--min-tnr", type=float, default=None, help="Optional constraint for labeled mode")
+    parser.add_argument(
         "--curve-csv",
         default=None,
         help="Path to save labeled calibration curve as CSV (only labeled mode)",
@@ -109,6 +129,11 @@ def main(argv: list[str] | None = None) -> int:
             prefer_mm=not args.prefer_px,
             tau_min=args.tau_min,
             tau_max=args.tau_max,
+            objective=args.objective,
+            max_mean_ipn_bad=args.max_mean_ipn_bad,
+            min_mean_ipn_gap=args.min_mean_ipn_gap,
+            min_tpr=args.min_tpr,
+            min_tnr=args.min_tnr,
         )
         curve = build_labeled_tau_curve(
             good_report_paths=good_paths,
@@ -133,9 +158,19 @@ def main(argv: list[str] | None = None) -> int:
             "bad_reports_used": result.bad_reports_used,
             "accept_ipn": result.accept_ipn,
             "objective": result.objective,
+            "max_mean_ipn_bad": result.max_mean_ipn_bad,
+            "min_mean_ipn_gap": result.min_mean_ipn_gap,
+            "min_tpr": result.min_tpr,
+            "min_tnr": result.min_tnr,
+            "constraints_satisfied": result.constraints_satisfied,
+            "feasible_points": result.feasible_points,
+            "fallback_reason": result.fallback_reason,
             "balanced_accuracy": result.balanced_accuracy,
             "tpr": result.tpr,
             "tnr": result.tnr,
+            "mean_ipn_good": result.mean_ipn_good,
+            "mean_ipn_bad": result.mean_ipn_bad,
+            "mean_ipn_gap": result.mean_ipn_gap,
             "tp": result.tp,
             "fn": result.fn,
             "tn": result.tn,
