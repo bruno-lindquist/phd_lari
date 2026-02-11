@@ -48,6 +48,19 @@ class TauClassCalibrationResult:
     bad_paths: list[str]
 
 
+@dataclass
+class TauCurvePoint:
+    tau: float
+    threshold_ratio: float
+    balanced_accuracy: float
+    tpr: float
+    tnr: float
+    tp: int
+    fn: int
+    tn: int
+    fp: int
+
+
 def collect_report_paths(patterns: Iterable[str]) -> list[str]:
     paths: list[str] = []
     for pattern in patterns:
@@ -118,35 +131,31 @@ def calibrate_tau_from_labeled_reports(
     if not good_paths or not bad_paths:
         raise ValueError("Both good and bad report sets are required")
 
-    units = _choose_units(good_paths + bad_paths, prefer_mm=prefer_mm)
-    good_values = _extract_ratio_values(good_paths, units)
-    bad_values = _extract_ratio_values(bad_paths, units)
-    if not good_values or not bad_values:
-        raise ValueError("No valid reports available for labeled calibration")
-
-    # Decision rule at fixed acceptance threshold:
-    # ipn = 100 * (1 - ratio / tau), accept iff ipn >= accept_ipn
-    # <=> ratio <= tau * (1 - accept_ipn/100)
-    factor = 1.0 - accept_ipn / 100.0
-    boundaries = [tau_min, tau_max]
-    for _, ratio in good_values + bad_values:
-        boundaries.append(ratio / factor)
-    candidates = _midpoint_candidates(boundaries, tau_min=tau_min, tau_max=tau_max)
-    if not candidates:
-        candidates = [tau_min, tau_max]
+    units, good_values, bad_values = _prepare_labeled_ratio_values(
+        good_paths, bad_paths, prefer_mm=prefer_mm
+    )
+    curve = build_labeled_tau_curve(
+        good_report_paths=good_paths,
+        bad_report_paths=bad_paths,
+        accept_ipn=accept_ipn,
+        prefer_mm=prefer_mm,
+        tau_min=tau_min,
+        tau_max=tau_max,
+    )
+    if not curve.points:
+        raise ValueError("No tau candidates available for labeled calibration")
 
     best = None
-    for tau in candidates:
-        score = _evaluate_tau_classifier(good_values, bad_values, tau=tau, accept_ipn=accept_ipn)
+    for point in curve.points:
         # Conservative tie-breaker: lower tau for same balanced accuracy.
-        key = (score["balanced_accuracy"], -tau)
+        key = (point.balanced_accuracy, -point.tau)
         if best is None or key > best["key"]:
-            best = {"tau": tau, "score": score, "key": key}
+            best = {"point": point, "key": key}
 
     assert best is not None
-    score = best["score"]
+    point = best["point"]
     return TauClassCalibrationResult(
-        tau=float(best["tau"]),
+        tau=float(point.tau),
         units=units,
         good_reports_used=len(good_values),
         bad_reports_used=len(bad_values),
@@ -154,15 +163,91 @@ def calibrate_tau_from_labeled_reports(
         tau_min=float(tau_min),
         tau_max=float(tau_max),
         objective="balanced_accuracy",
-        balanced_accuracy=float(score["balanced_accuracy"]),
-        tpr=float(score["tpr"]),
-        tnr=float(score["tnr"]),
-        tp=int(score["tp"]),
-        fn=int(score["fn"]),
-        tn=int(score["tn"]),
-        fp=int(score["fp"]),
+        balanced_accuracy=float(point.balanced_accuracy),
+        tpr=float(point.tpr),
+        tnr=float(point.tnr),
+        tp=int(point.tp),
+        fn=int(point.fn),
+        tn=int(point.tn),
+        fp=int(point.fp),
         good_paths=[p for p, _ in good_values],
         bad_paths=[p for p, _ in bad_values],
+    )
+
+
+@dataclass
+class TauCurve:
+    units: str
+    accept_ipn: float
+    tau_min: float
+    tau_max: float
+    good_reports_used: int
+    bad_reports_used: int
+    points: list[TauCurvePoint]
+
+
+def build_labeled_tau_curve(
+    good_report_paths: Iterable[str],
+    bad_report_paths: Iterable[str],
+    accept_ipn: float = 70.0,
+    prefer_mm: bool = True,
+    tau_min: float = 0.005,
+    tau_max: float = 0.2,
+    max_points: int = 400,
+) -> TauCurve:
+    if not (0.0 < accept_ipn < 100.0):
+        raise ValueError("accept_ipn must be between 0 and 100")
+    if tau_min <= 0.0:
+        raise ValueError("tau_min must be > 0")
+    if tau_max <= tau_min:
+        raise ValueError("tau_max must be greater than tau_min")
+    if max_points <= 0:
+        raise ValueError("max_points must be > 0")
+
+    good_paths = [str(Path(p).resolve()) for p in good_report_paths]
+    bad_paths = [str(Path(p).resolve()) for p in bad_report_paths]
+    if not good_paths or not bad_paths:
+        raise ValueError("Both good and bad report sets are required")
+
+    units, good_values, bad_values = _prepare_labeled_ratio_values(
+        good_paths, bad_paths, prefer_mm=prefer_mm
+    )
+
+    factor = 1.0 - accept_ipn / 100.0
+    boundaries = [tau_min, tau_max]
+    for _, ratio in good_values + bad_values:
+        boundaries.append(ratio / factor)
+    candidates = _midpoint_candidates(boundaries, tau_min=tau_min, tau_max=tau_max)
+    candidates = sorted(set(candidates))
+    if not candidates:
+        candidates = [tau_min, tau_max]
+    candidates = _downsample_sorted_values(candidates, max_points=max_points)
+
+    points: list[TauCurvePoint] = []
+    for tau in candidates:
+        score = _evaluate_tau_classifier(good_values, bad_values, tau=tau, accept_ipn=accept_ipn)
+        points.append(
+            TauCurvePoint(
+                tau=float(tau),
+                threshold_ratio=float((1.0 - accept_ipn / 100.0) * tau),
+                balanced_accuracy=float(score["balanced_accuracy"]),
+                tpr=float(score["tpr"]),
+                tnr=float(score["tnr"]),
+                tp=int(score["tp"]),
+                fn=int(score["fn"]),
+                tn=int(score["tn"]),
+                fp=int(score["fp"]),
+            )
+        )
+
+    return TauCurve(
+        units=units,
+        accept_ipn=float(accept_ipn),
+        tau_min=float(tau_min),
+        tau_max=float(tau_max),
+        good_reports_used=len(good_values),
+        bad_reports_used=len(bad_values),
+        points=points,
     )
 
 
@@ -264,6 +349,17 @@ def _choose_units(paths: list[str], prefer_mm: bool) -> str:
     raise ValueError("No usable metrics (px/mm) found in report set")
 
 
+def _prepare_labeled_ratio_values(
+    good_paths: list[str], bad_paths: list[str], prefer_mm: bool
+) -> tuple[str, list[tuple[str, float]], list[tuple[str, float]]]:
+    units = _choose_units(good_paths + bad_paths, prefer_mm=prefer_mm)
+    good_values = _extract_ratio_values(good_paths, units)
+    bad_values = _extract_ratio_values(bad_paths, units)
+    if not good_values or not bad_values:
+        raise ValueError("No valid reports available for labeled calibration")
+    return units, good_values, bad_values
+
+
 def _midpoint_candidates(boundaries: list[float], tau_min: float, tau_max: float) -> list[float]:
     vals = sorted({min(tau_max, max(tau_min, float(v))) for v in boundaries if np_isfinite(v)})
     if not vals:
@@ -279,6 +375,15 @@ def _midpoint_candidates(boundaries: list[float], tau_min: float, tau_max: float
         if not any(abs(v - u) <= 1e-12 for u in uniq):
             uniq.append(v)
     return uniq
+
+
+def _downsample_sorted_values(values: list[float], max_points: int) -> list[float]:
+    if len(values) <= max_points:
+        return values
+    if max_points <= 1:
+        return [values[0]]
+    idxs = np_linspace_indices(len(values), max_points)
+    return [values[i] for i in idxs]
 
 
 def _evaluate_tau_classifier(
@@ -322,3 +427,16 @@ def _aggregate(values: list[float], statistic_name: str) -> float:
 
 def np_isfinite(value: float) -> bool:
     return not (value != value or value == float("inf") or value == float("-inf"))
+
+
+def np_linspace_indices(n: int, k: int) -> list[int]:
+    if k <= 1:
+        return [0]
+    if n <= 1:
+        return [0]
+    out: list[int] = []
+    for i in range(k):
+        idx = int(round(i * (n - 1) / (k - 1)))
+        if not out or idx != out[-1]:
+            out.append(idx)
+    return out
